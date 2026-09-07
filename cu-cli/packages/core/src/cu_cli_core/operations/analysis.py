@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 from ..analysis import AnalyzeJob, AnalyzeOutcome, BatchResult, analyze_many
 from ..contracts import AnalyzeRequest, AnalyzerTestRequest, InputPlan
-from ..input_planning import plan_inputs
+from ..input_planning import plan_inputs, redact_input_reference
 
 _TEST_DISCLAIMER = (
     "This is not a real accuracy benchmark. It only checks whether a value was "
@@ -41,9 +41,10 @@ def execute_analyze(
     planned = input_plan or _input_plan(request)
     selected_jobs = jobs or [
         AnalyzeJob(
-            input_ref=str(item.path),
+            input_ref=redact_input_reference(item.reference),
             analyzer_id=request.analyzer or "",
             out_path=None,
+            input_url=item.url,
         )
         for item in planned.inputs
     ]

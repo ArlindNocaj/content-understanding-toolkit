@@ -25,6 +25,7 @@ class SelectionMode(str, Enum):
 class InputOrigin(str, Enum):
     POSITIONAL_FILE = "positional-file"
     POSITIONAL_SOURCE = "positional-source"
+    POSITIONAL_URL = "positional-url"
     NAMED_FILE = "named-file"
     NAMED_SOURCE = "named-source"
 
@@ -159,7 +160,7 @@ class AnalyzerDeleteRequest:
 
 @dataclass(frozen=True)
 class AnalyzeRequest:
-    positional_inputs: tuple[Path, ...] = ()
+    positional_inputs: tuple[str, ...] = ()
     files: tuple[Path, ...] = ()
     sources: tuple[Path, ...] = ()
     pattern: str | None = None
@@ -180,7 +181,7 @@ class AnalyzeRequest:
         object.__setattr__(
             self,
             "positional_inputs",
-            tuple(Path(path) for path in self.positional_inputs),
+            tuple(str(value) for value in self.positional_inputs),
         )
         object.__setattr__(self, "files", tuple(Path(path) for path in self.files))
         object.__setattr__(self, "sources", tuple(Path(path) for path in self.sources))
@@ -329,11 +330,24 @@ class EnvironmentVariableListRequest:
 
 @dataclass(frozen=True)
 class PlannedInput:
-    path: Path
-    source_root: Path
+    path: Path | None
+    source_root: Path | None
     relative_path: Path
     origin: InputOrigin
-    size_bytes: int
+    size_bytes: int | None
+    url: str | None = None
+
+    @property
+    def reference(self) -> str:
+        if self.url is not None:
+            return self.url
+        if self.path is None:
+            raise ValueError("planned input must have either a local path or URL.")
+        return str(self.path)
+
+    @property
+    def is_remote(self) -> bool:
+        return self.url is not None
 
 
 @dataclass(frozen=True)

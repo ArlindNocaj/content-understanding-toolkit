@@ -8,9 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from cu_cli_core.contracts import ExistingResultPolicy, ResultView, SelectionMode
+from cu_cli_core.contracts import ExistingResultPolicy, InputOrigin, ResultView, SelectionMode
 from cu_cli_core.errors import UsageError, ValidationError
-from cu_cli_core.input_planning import plan_inputs, plan_outputs
+from cu_cli_core.input_planning import (
+    plan_inputs,
+    plan_outputs,
+    redact_input_reference,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -27,6 +31,105 @@ def test_positional_files_preserve_order_and_measure_content(tmp_path):
     assert [item.path for item in plan.inputs] == [second.resolve(), first.resolve()]
     assert plan.total_bytes == 3
     assert plan.extension_counts == {".pdf": 1, ".xyz": 1}
+
+
+def test_positional_https_url_is_preserved_without_local_file_access():
+    url = "https://storage.example.test/container/sample.pdf"
+
+    plan = plan_inputs(positional=[url])
+
+    assert len(plan.inputs) == 1
+    assert plan.inputs[0].origin is InputOrigin.POSITIONAL_URL
+    assert plan.inputs[0].path is None
+    assert plan.inputs[0].url == url
+    assert plan.inputs[0].reference == url
+    assert plan.inputs[0].relative_path == Path("sample.pdf")
+    assert plan.total_bytes == 0
+    assert plan.extension_counts == {".pdf": 1}
+
+
+def test_positional_sas_url_preserves_query_parameters():
+    url = (
+        "https://storage.example.test/container/video.mp4"
+        "?sv=2026-01-01&sp=r&sig=a%2Bb%2Fc%3D"
+    )
+
+    plan = plan_inputs(positional=[url])
+
+    assert plan.inputs[0].url == url
+    assert plan.inputs[0].relative_path == Path("video.mp4")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https:/container/input.pdf?sv=1&sig=secret",
+        "https://[invalid/container/input.pdf?sv=1&sig=secret",
+        "https://user:password@[invalid/input.pdf?sig=secret",
+        "https://user:password@example.test/input.pdf?sig=secret",
+    ],
+)
+def test_redact_input_reference_hides_secrets_from_malformed_urls(url):
+    redacted = redact_input_reference(url)
+
+    assert "secret" not in redacted
+    assert "password" not in redacted
+
+
+def test_invalid_url_port_is_rejected_without_echoing_query():
+    url = "https://example.test:not-a-port/input.pdf?sig=secret"
+
+    with pytest.raises(ValidationError, match="not a valid URL") as error:
+        plan_inputs(positional=[url])
+
+    assert "secret" not in str(error.value)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="colon is not valid in a Windows filename")
+def test_existing_https_colon_filename_remains_a_local_input(tmp_path):
+    local_file = tmp_path / "https:invoice.pdf"
+    local_file.write_text("input")
+
+    plan = plan_inputs(positional=[local_file])
+
+    assert plan.inputs[0].path == local_file.resolve()
+    assert plan.inputs[0].url is None
+
+
+def test_windows_drive_spelling_is_not_treated_as_url():
+    with pytest.raises(ValidationError, match="does not exist") as error:
+        plan_inputs(positional=["C://does-not-exist/input.pdf"])
+
+    assert "unsupported URL scheme" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("url", "message"),
+    [
+        ("http://example.test/sample.pdf", "unsupported URL scheme 'http'"),
+        ("ftp://example.test/sample.pdf", "unsupported URL scheme 'ftp'"),
+        ("https:/sample.pdf", "not a valid HTTPS URL"),
+    ],
+)
+def test_positional_unsupported_url_has_actionable_error(url, message):
+    with pytest.raises(ValidationError, match=message) as error:
+        plan_inputs(positional=[url])
+
+    assert "HTTPS" in (error.value.hint or "") or "host" in (error.value.hint or "")
+
+
+def test_named_file_rejects_https_url_with_positional_hint():
+    with pytest.raises(UsageError, match="local files only") as error:
+        plan_inputs(files=["https://example.test/sample.pdf"])
+
+    assert "positional" in (error.value.hint or "")
+
+
+def test_url_over_service_length_limit_is_rejected():
+    url = "https://example.test/" + ("a" * 8192)
+
+    with pytest.raises(ValidationError, match="8192-character service limit"):
+        plan_inputs(positional=[url])
 
 
 def test_named_files_require_literal_files(tmp_path):
@@ -266,6 +369,51 @@ def test_single_input_streams_without_destination_by_default(tmp_path):
     )
 
     assert execution.outputs[0].path is None
+
+
+def test_remote_input_uses_url_filename_under_output_directory(tmp_path):
+    url = "https://storage.example.test/container/sample.pdf?sv=1&sig=secret"
+
+    execution = plan_outputs(
+        plan_inputs(positional=[url]),
+        view=ResultView.FULL,
+        output_dir=tmp_path / "results",
+    )
+
+    assert execution.outputs[0].path == tmp_path / "results/sample.pdf.result.json"
+    assert "secret" not in str(execution.outputs[0].path)
+
+
+def test_remote_batch_requires_output_directory():
+    inputs = plan_inputs(
+        positional=[
+            "https://one.example.test/a.pdf",
+            "https://two.example.test/b.pdf",
+        ]
+    )
+
+    with pytest.raises(UsageError, match="--output-dir is required"):
+        plan_outputs(inputs, view=ResultView.FULL)
+
+
+def test_remote_output_collisions_are_safe_and_distinct(tmp_path):
+    inputs = plan_inputs(
+        positional=[
+            "https://one.example.test/c/input.pdf?sig=first-secret",
+            "https://two.example.test/c/input.pdf?sig=second-secret",
+        ]
+    )
+
+    execution = plan_outputs(
+        inputs,
+        view=ResultView.FULL,
+        output_dir=tmp_path / "results",
+    )
+
+    paths = [output.path for output in execution.outputs]
+    assert len(set(paths)) == 2
+    assert all(path is not None and path.name.startswith("input.pdf.") for path in paths)
+    assert all("secret" not in str(path) for path in paths)
 
 
 def test_multiple_inputs_write_alongside_sources(tmp_path):

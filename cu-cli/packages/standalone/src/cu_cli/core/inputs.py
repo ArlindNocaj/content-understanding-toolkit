@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
-"""Input discovery and result-path planning for ``cu analyze`` (Click-free).
+"""Legacy local input discovery and result-path planning helpers.
 
 Expands user-supplied inputs (files, directories, globs) into concrete local
 file paths and plans where each result file is written. Soft warnings (empty
@@ -14,6 +14,10 @@ never clobber the source: ``report.pdf`` -> ``report.pdf.result.md`` /
 ``report.pdf.result.json``. The full filename (extension included) is kept so
 inputs that share a stem but differ by extension (``note.mp3`` vs ``note.pdf``)
 never collide.
+
+The production ``cu analyze`` path uses :mod:`cu_cli_core.input_planning`, which
+also supports HTTPS inputs. This compatibility module intentionally remains
+local-only for callers that still depend on its glob expansion behavior.
 """
 
 from __future__ import annotations
@@ -113,7 +117,8 @@ def expand_dir(path: Path, skipped: list[tuple[str, str]] | None = None) -> list
 def expand_inputs(items: Iterable[str]) -> ExpandResult:
     """Expand directories and globs into concrete local file paths.
 
-    URLs are rejected — the MVP is local-only for now (URL support is deferred).
+    URLs are outside this legacy helper; use ``cu_cli_core.input_planning`` for
+    the current ``cu analyze`` input contract.
     Returns an :class:`ExpandResult` with the deduped file list and any soft
     warnings; raises :class:`~cu_cli.errors.CuCliError` when nothing matched.
     """
@@ -131,9 +136,8 @@ def expand_inputs(items: Iterable[str]) -> ExpandResult:
         low = it.lower()
         if low.startswith(("http://", "https://")):
             raise CuCliError(
-                f"URL inputs are not supported in this release: {it}",
-                hint="MVP analyzes local files, directories, and globs only. "
-                     "Download the file first, or wait for URL support (Phase 2).",
+                f"this local input helper does not accept URLs: {it}",
+                hint="use cu_cli_core.input_planning.plan_inputs for HTTPS inputs.",
             )
         if any(ch in it for ch in "*?["):
             matches = sorted(_glob.glob(it, recursive=True))

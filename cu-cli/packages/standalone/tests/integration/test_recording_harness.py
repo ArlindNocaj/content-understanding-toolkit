@@ -5,11 +5,30 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
-from support.recording import _before_record_response
+from support.recording import _before_record_request, _before_record_response
 
 pytestmark = pytest.mark.unit
+
+
+def test_before_record_request_scrubs_sas_url_in_json_body() -> None:
+    request = SimpleNamespace(
+        uri="https://realacct.services.ai.azure.com/contentunderstanding/analyze",
+        headers={},
+        body=(
+            '{"inputs":[{"url":"https://storage.example.test/c/input.pdf'
+            '?sv=2026-01-01&sp=r&sig=top-secret"}]}'
+        ),
+    )
+
+    out = _before_record_request(request)
+
+    assert "top-secret" not in out.body
+    assert "sig=REDACTED" in out.body
+    assert "sv=REDACTED" in out.body
 
 
 def test_before_record_response_scrubs_host_and_sensitive_query(monkeypatch) -> None:

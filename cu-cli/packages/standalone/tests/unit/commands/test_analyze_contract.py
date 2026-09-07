@@ -102,6 +102,157 @@ def test_positional_wildcard_is_not_interpreted_by_cu(monkeypatch):
     assert "--pattern" in result.output
 
 
+def test_https_sas_url_reaches_url_runner_without_secret_in_display(
+    analyze_runtime,
+    monkeypatch,
+):
+    url = (
+        "https://storage.example.test/container/video.mp4"
+        "?sv=2026-01-01&sp=r&sig=a%2Bb%2Fc%3D"
+    )
+    captured = []
+
+    def run_one(_client, job):
+        captured.append(job)
+        return job, {"status": "Succeeded", "result": {"analyzerId": job.analyzer_id}}
+
+    monkeypatch.setattr("cu_cli.commands.analyze._run_one", run_one)
+
+    result = _run("analyze", url, "--json")
+
+    assert result.exit_code == 0, result.output
+    assert captured[0].input_url == url
+    assert captured[0].input_ref.endswith("video.mp4?REDACTED")
+    assert "a%2Bb%2Fc%3D" not in result.output
+
+
+def test_success_json_redacts_sas_echoed_by_service(analyze_runtime, monkeypatch):
+    secret = "success-json-secret"
+    url = f"https://storage.example.test/c/input.pdf?sv=1&sig={secret}"
+    monkeypatch.setattr(
+        "cu_cli.commands.analyze._run_one",
+        lambda _client, job: (job, {"warning": f"Downloaded {job.input_url}"}),
+    )
+
+    result = _run("analyze", url, "--json")
+
+    assert result.exit_code == 0, result.output
+    assert secret not in result.output
+    assert json.loads(result.output)["warning"].endswith("input.pdf?REDACTED")
+
+
+def test_success_markdown_redacts_sas_echoed_by_service(analyze_runtime, monkeypatch):
+    secret = "success-markdown-secret"
+    url = f"https://storage.example.test/c/input.pdf?sv=1&sig={secret}"
+    monkeypatch.setattr(
+        "cu_cli.commands.analyze.render_markdown",
+        lambda _result: f"Source: {url}\n",
+    )
+
+    result = _run("analyze", url)
+
+    assert result.exit_code == 0, result.output
+    assert secret not in result.output
+    assert "input.pdf?REDACTED" in result.output
+
+
+@pytest.mark.parametrize("url", ["http://example.test/a.pdf", "ftp://example.test/a.pdf"])
+def test_unsupported_remote_scheme_fails_before_config_or_client(monkeypatch, url):
+    monkeypatch.setattr(
+        "cu_cli.commands.analyze.Profile.load",
+        lambda **_kwargs: pytest.fail("config must not load"),
+    )
+    monkeypatch.setattr(
+        "cu_cli.commands.analyze.build_client",
+        lambda *_args, **_kwargs: pytest.fail("client must not build"),
+    )
+
+    result = _run("analyze", url)
+
+    assert result.exit_code == 2
+    assert "unsupported URL scheme" in result.output
+    assert "HTTPS" in result.output
+
+
+def test_sas_url_dry_run_redacts_secret_and_reports_unavailable_size(analyze_runtime):
+    url = "https://storage.example.test/container/input.pdf?sv=1&sp=r&sig=secret"
+
+    result = _run(
+        "analyze",
+        url,
+        "--json",
+        "--output-dir",
+        "results",
+        "--dry-run",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "input.pdf?REDACTED" in result.output
+    assert "secret" not in result.output
+    assert "1 remote size(s) unavailable" in result.output
+    assert not Path("results").exists()
+
+
+def test_remote_service_error_redacts_sas_in_output_and_report(
+    analyze_runtime,
+    monkeypatch,
+):
+    from azure.core.exceptions import HttpResponseError
+
+    secret = "top-secret-signature"
+    url = f"https://storage.example.test/c/input.pdf?sv=1&sp=r&sig={secret}"
+    service_error = HttpResponseError(message=f"Could not download {url}")
+    service_error.status_code = 403
+
+    def raise_service_error(_client, _job):
+        raise service_error
+
+    monkeypatch.setattr("cu_cli.commands.analyze._run_one", raise_service_error)
+
+    result = _run(
+        "analyze",
+        url,
+        "--json",
+        "--output-dir",
+        "results",
+        "--report-file",
+        "report.json",
+        "--yes",
+    )
+
+    assert result.exit_code == 1, result.output
+    assert secret not in result.output
+    assert "Remote input could not be read" in result.output
+    assert "sp=r" in result.output
+    assert "storage network rules" in result.output
+    report_text = Path("report.json").read_text(encoding="utf-8")
+    assert secret not in report_text
+    report = json.loads(report_text)
+    assert report["results"][0]["input"].endswith("input.pdf?REDACTED")
+
+
+def test_remote_batch_writes_safe_distinct_results(analyze_runtime):
+    urls = (
+        "https://one.example.test/c/input.pdf?sig=first-secret",
+        "https://two.example.test/c/input.pdf?sig=second-secret",
+    )
+
+    result = _run(
+        "analyze",
+        *urls,
+        "--json",
+        "--output-dir",
+        "results",
+        "--yes",
+    )
+
+    assert result.exit_code == 0, result.output
+    outputs = list(Path("results").glob("input.pdf.*.result.json"))
+    assert len(outputs) == 2
+    assert "secret" not in result.output
+    assert all("secret" not in path.name for path in outputs)
+
+
 def test_source_pattern_is_nonrecursive_and_accepts_unknown_extensions(
     analyze_runtime,
 ):

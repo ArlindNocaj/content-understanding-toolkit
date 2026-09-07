@@ -327,6 +327,46 @@ cu profile set default_analyzer prebuilt-layout
 cu analyze ./document.pdf
 ```
 
+### Analyze an HTTPS or SAS URL
+
+Pass an HTTPS URL in the same positional input slot as a local file. CU CLI sends
+the reference to Content Understanding and does not download or upload the file
+itself. This enables URL-based service limits, including large video workflows:
+
+```bash
+cu analyze "https://storage.example.net/container/video.mp4" \
+  --analyzer prebuilt-videoSearch
+```
+
+Azure Blob SAS query parameters are preserved exactly for the service request.
+Quote the complete URL so the shell does not interpret `&` characters:
+
+```bash
+cu analyze "https://storage.example.net/container/video.mp4?sv=<version>&sp=r&sig=<signature>" \
+  --analyzer prebuilt-videoSearch \
+  --json
+```
+
+Only absolute HTTPS URLs are accepted, and the service URL limit is 8,192
+characters. Use a short-lived SAS with read permission (`sp=r`). CU CLI removes
+the query string from console output and `--report-file`; the original URL is
+still sent to Content Understanding. If the service cannot read the input,
+verify the SAS start and expiry times, read permission, and Azure Storage network
+rules.
+
+For multiple inputs that include a URL, specify `--output-dir` because a remote
+result cannot be written next to its source. A dry run reports remote sizes as
+unavailable and does not probe or download remote content:
+
+```bash
+cu analyze \
+  "https://storage.example.net/container/one.pdf" \
+  "https://storage.example.net/container/two.pdf" \
+  --analyzer prebuilt-layout \
+  --output-dir ./results \
+  --dry-run
+```
+
 Analyze immediate files in a directory:
 
 ```bash

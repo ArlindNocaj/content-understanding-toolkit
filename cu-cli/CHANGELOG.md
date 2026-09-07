@@ -1,5 +1,12 @@
 # Release History
 
+## Unreleased
+
+### Features Added
+
+- Added HTTPS and Azure Blob SAS URL inputs to `cu analyze`, including URL-based
+	analysis for large audio and video files without downloading them through the CLI.
+
 ## 0.1.0b1 (2026-09-04)
 
 ### Features Added
