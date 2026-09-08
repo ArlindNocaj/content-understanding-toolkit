@@ -1,5 +1,12 @@
 # Release History
 
+## Unreleased
+
+### Features Added
+
+- Added `cu analyzer update` to change analyzer descriptions and tags without
+	forwarding schema, configuration, or model fields.
+
 ## 0.1.0b1 (2026-09-04)
 
 ### Features Added
