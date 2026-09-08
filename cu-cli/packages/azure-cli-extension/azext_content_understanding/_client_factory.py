@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from azure.cli.core._profile import Profile as AzureCliProfile
-from azure.cli.core.azclierror import ArgumentUsageError
+from azure.cli.core.azclierror import ArgumentUsageError, AzureConnectionError
 from azure.cli.core.util import get_az_user_agent
 
 from cu_cli_core.client import build_content_understanding_client
@@ -58,6 +58,11 @@ def create_content_understanding_client(
         api_version=api_version,
         profile_name=profile_name,
     )
+    cloud_name = getattr(getattr(cmd.cli_ctx, "cloud", None), "name", "AzureCloud")
+    if cloud_name != "AzureCloud":
+        raise AzureConnectionError(
+            f"Azure cloud '{cloud_name}' is not supported by this preview extension."
+        )
     return build_content_understanding_client(
         endpoint=resolved_endpoint,
         credential=get_cli_credential(cmd.cli_ctx),

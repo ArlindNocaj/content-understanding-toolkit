@@ -20,3 +20,15 @@ def analyzer_list_table(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         }
         for item in results
     ]
+
+
+def defaults_table(result: dict[str, Any]) -> list[dict[str, str]]:
+    """Project model deployment mappings into one row per model."""
+
+    mappings = result.get("modelDeployments") or result.get("model_deployments") or {}
+    if not isinstance(mappings, dict):
+        return []
+    return [
+        {"Model": str(model), "Deployment": str(deployment)}
+        for model, deployment in sorted(mappings.items())
+    ]

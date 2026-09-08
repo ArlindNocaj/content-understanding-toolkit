@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from azure.cli.core.azclierror import ArgumentUsageError
+from azure.cli.core.azclierror import ArgumentUsageError, AzureConnectionError
 
 from azext_content_understanding import _client_factory
 
@@ -70,3 +70,21 @@ def test_get_cli_credential_uses_active_subscription(monkeypatch: pytest.MonkeyP
 
     assert _client_factory.get_cli_credential(cli_ctx) is credential
     assert calls == {"cli_ctx": cli_ctx, "subscription_id": "subscription-id"}
+
+
+@pytest.mark.unit
+def test_create_client_rejects_unsupported_cloud(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        _client_factory,
+        "resolve_service_settings",
+        lambda **kwargs: ("https://example", "2025-11-01"),
+    )
+    cmd = SimpleNamespace(cli_ctx=SimpleNamespace(cloud=SimpleNamespace(name="AzureUSGovernment")))
+
+    with pytest.raises(AzureConnectionError, match="AzureUSGovernment"):
+        _client_factory.create_content_understanding_client(
+            cmd,
+            endpoint=None,
+            api_version=None,
+            profile_name=None,
+        )
