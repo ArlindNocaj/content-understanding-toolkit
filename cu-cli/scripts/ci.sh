@@ -7,6 +7,7 @@ set -euo pipefail
 product_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 core_dir="${product_dir}/packages/core"
 cli_dir="${product_dir}/packages/standalone"
+extension_dir="${product_dir}/packages/azure-cli-extension"
 
 section() {
     local title="$1"
@@ -32,6 +33,8 @@ python -m pip install --upgrade pip
 cd "${core_dir}"
 python -m pip install -e ".[dev]"
 cd "${cli_dir}"
+python -m pip install -e ".[dev]"
+cd "${extension_dir}"
 python -m pip install -e ".[dev]"
 end_section
 
@@ -74,4 +77,21 @@ end_section
 export CU_TEST_REC_MODE=playback
 section "Integration tests - offline playback"
 python -m pytest -q -m integration tests/integration/
+end_section
+
+section "Lint Azure CLI extension (ruff)"
+cd "${extension_dir}"
+python -m ruff check .
+end_section
+
+section "Type check Azure CLI extension (mypy)"
+python -m mypy azext_content_understanding
+end_section
+
+section "Unit tests - Azure CLI extension"
+python -m pytest -q -m unit tests/unit/
+end_section
+
+section "Build Azure CLI extension wheel"
+python -m build --wheel
 end_section
