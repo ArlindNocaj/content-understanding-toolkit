@@ -1,5 +1,13 @@
 # Release History
 
+## Unreleased
+
+### Features Added
+
+- Added result limits, continuation tokens, and exact or prefix ID filtering to
+	`cu analyzer list`, while preserving complete array output for unlimited JSON
+	queries.
+
 ## 0.1.0b1 (2026-09-04)
 
 ### Features Added
