@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -380,8 +381,137 @@ def test_remote_input_uses_url_filename_under_output_directory(tmp_path):
         output_dir=tmp_path / "results",
     )
 
-    assert execution.outputs[0].path == tmp_path / "results/sample.pdf.result.json"
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    assert execution.outputs[0].path == tmp_path / f"results/sample.pdf.{digest}.result.json"
     assert "secret" not in str(execution.outputs[0].path)
+
+
+@pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
+@pytest.mark.parametrize(
+    "basename",
+    ["a" * 230 + ".pdf", "\u4e2d" * 100 + ".pdf", "a" * 7000],
+    ids=["ascii", "unicode", "long-url"],
+)
+def test_remote_generated_filename_has_byte_budget(tmp_path, view, basename):
+    url = f"https://example.test/{basename}?sig=secret"
+    execution = plan_outputs(
+        plan_inputs(positional=[url]), view=view, output_dir=tmp_path,
+    )
+
+    output = execution.outputs[0].path
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    suffix = ".result.json" if view is ResultView.FULL else ".result.md"
+    assert output is not None
+    assert len(output.name.encode("utf-8")) <= 240
+    assert output.name.endswith(f".{digest}{suffix}")
+    assert execution.outputs[0].source.relative_path.name == basename
+
+
+@pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
+@pytest.mark.parametrize("reverse_inputs", [False, True])
+def test_mixed_collisions_keep_remote_path_and_unique_local_outputs(
+    tmp_path, view, reverse_inputs,
+):
+    url = "https://example.test/input.pdf?id=one"
+    output_dir = tmp_path / "results"
+    remote_path = plan_outputs(
+        plan_inputs(positional=[url]), view=view, output_dir=output_dir,
+    ).outputs[0].path
+    assert remote_path is not None
+    suffix = ".result.json" if view is ResultView.FULL else ".result.md"
+    local = tmp_path / remote_path.name.removesuffix(suffix)
+    local.write_text("local input")
+    local_digest = hashlib.sha1(str(local.resolve()).encode("utf-8")).hexdigest()[:8]
+    neighbor = local.with_name(f"{local.name}.{local_digest}")
+    neighbor.write_text("neighbor input")
+    inputs = [url, str(local), str(neighbor)]
+    if reverse_inputs:
+        inputs.reverse()
+
+    execution = plan_outputs(
+        plan_inputs(positional=inputs), view=view, output_dir=output_dir,
+    )
+
+    paths = {output.source.reference: output.path for output in execution.outputs}
+    assert paths[url] == remote_path
+    assert len(set(paths.values())) == len(inputs)
+    assert paths[str(neighbor.resolve())] == output_dir / f"{neighbor.name}{suffix}"
+
+
+@pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
+def test_remote_digest_collision_is_rejected(tmp_path, monkeypatch, view):
+    digest = hashlib.sha256(b"collision")
+    monkeypatch.setattr("cu_cli_core.input_planning.hashlib.sha256", lambda _value: digest)
+    inputs = plan_inputs(positional=[
+        "https://example.test/input.pdf?id=one&sig=secret",
+        "https://example.test/input.pdf?id=two&sig=secret",
+    ])
+    output_dir = tmp_path / "results"
+
+    with pytest.raises(ValidationError, match="same result output path") as error:
+        plan_outputs(inputs, view=view, output_dir=output_dir)
+
+    assert "secret" not in str(error.value)
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
+def test_exhausted_local_collision_names_are_rejected(tmp_path, view):
+    url = "https://example.test/input.pdf?sig=secret"
+    output_dir = tmp_path / "results"
+    remote_path = plan_outputs(
+        plan_inputs(positional=[url]), view=view, output_dir=output_dir,
+    ).outputs[0].path
+    assert remote_path is not None
+    suffix = ".result.json" if view is ResultView.FULL else ".result.md"
+    local = tmp_path / remote_path.name.removesuffix(suffix)
+    local.write_text("local input")
+    digest = hashlib.sha1(str(local.resolve()).encode("utf-8")).hexdigest()
+    inputs = [url, str(local)]
+    for length in range(8, len(digest) + 1, 8):
+        neighbor = local.with_name(f"{local.name}.{digest[:length]}")
+        neighbor.write_text("neighbor input")
+        inputs.append(str(neighbor))
+
+    with pytest.raises(ValidationError, match="cannot resolve result output path collision"):
+        plan_outputs(plan_inputs(positional=inputs), view=view, output_dir=output_dir)
+
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
+def test_local_digest_collisions_stay_stable_when_reordered(tmp_path, monkeypatch, view):
+    inputs = []
+    for directory in ("first", "second"):
+        local = tmp_path / directory / "same.pdf"
+        local.parent.mkdir()
+        local.write_text(directory)
+        inputs.append(local)
+    digest = hashlib.sha1(b"collision")
+    monkeypatch.setattr("cu_cli_core.input_planning.hashlib.sha1", lambda _value: digest)
+    original = plan_outputs(
+        plan_inputs(positional=inputs), view=view, output_dir=tmp_path / "results",
+    )
+    reordered = plan_outputs(
+        plan_inputs(positional=list(reversed(inputs))),
+        view=view, output_dir=tmp_path / "results",
+    )
+
+    original_paths = {output.source.reference: output.path for output in original.outputs}
+    reordered_paths = {output.source.reference: output.path for output in reordered.outputs}
+    assert len(set(original_paths.values())) == 2
+    assert reordered_paths == original_paths
+
+
+def test_remote_explicit_output_file_is_unchanged(tmp_path):
+    output = tmp_path / "custom.json"
+    execution = plan_outputs(
+        plan_inputs(positional=["https://example.test/input.pdf?sig=secret"]),
+        view=ResultView.FULL,
+        output_file=output,
+    )
+
+    assert execution.outputs[0].path == output
 
 
 def test_remote_batch_requires_output_directory():
@@ -414,6 +544,51 @@ def test_remote_output_collisions_are_safe_and_distinct(tmp_path):
     assert len(set(paths)) == 2
     assert all(path is not None and path.name.startswith("input.pdf.") for path in paths)
     assert all("secret" not in str(path) for path in paths)
+
+
+@pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
+@pytest.mark.parametrize("add_unrelated_input", [False, True])
+@pytest.mark.parametrize("keep_single_input", [False, True])
+def test_remote_collision_paths_remain_stable_when_inputs_reordered(
+    tmp_path, view, add_unrelated_input, keep_single_input,
+):
+    urls = [
+        "https://example.test/download?id=one&sig=first-secret",
+        "https://example.test/download?id=two&sig=second-secret",
+    ]
+    output_dir = tmp_path / "results"
+    original = plan_outputs(
+        plan_inputs(positional=urls), view=view, output_dir=output_dir,
+    )
+    original_paths = {output.source.url: output.path for output in original.outputs}
+    assert len(set(original_paths.values())) == 2
+    output_dir.mkdir()
+    for output in original.outputs:
+        assert output.path is not None
+        assert "secret" not in output.path.name
+        output.path.write_text(output.source.url, encoding="utf-8")
+
+    reordered = list(reversed(urls))
+    if keep_single_input:
+        reordered = reordered[:1]
+    if add_unrelated_input:
+        reordered.insert(0, "https://example.test/other.pdf")
+    execution = plan_outputs(
+        plan_inputs(positional=reordered),
+        view=view,
+        output_dir=output_dir,
+        on_existing=ExistingResultPolicy.SKIP,
+    )
+
+    for output in execution.outputs:
+        if output.source.url not in original_paths:
+            assert not output.exists
+            assert not output.skipped
+            continue
+        assert output.path == original_paths[output.source.url]
+        assert output.exists
+        assert output.skipped
+        assert output.path.read_text(encoding="utf-8") == output.source.url
 
 
 def test_multiple_inputs_write_alongside_sources(tmp_path):

@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
 import os
+import re
 import sys
 from pathlib import Path
 import tempfile
@@ -77,22 +79,97 @@ def _run_one_inline_with_usage(client, job: AnalyzeJob):
     return job, analyze_one_inline_with_usage(client, job)
 
 
-def _redact_output_payload(value):
+def _redact_result_text(text: str, *, input_url: str) -> str:
+    return text.replace(input_url, redact_input_reference(input_url))
+
+
+def _redact_output_payload(value, *, input_url: str | None = None):
     plain = to_jsonable(value)
     if isinstance(plain, str):
+        if input_url is not None:
+            return _redact_result_text(plain, input_url=input_url)
         return redact_sensitive_urls(plain)
     if isinstance(plain, list):
-        return [_redact_output_payload(item) for item in plain]
+        return [_redact_output_payload(item, input_url=input_url) for item in plain]
     if isinstance(plain, dict):
         return {
-            key: _redact_output_payload(item)
+            key: _redact_output_payload(item, input_url=input_url)
             for key, item in plain.items()
         }
     return plain
 
 
-def _write_markdown_stdout(result) -> None:
-    body = redact_sensitive_urls(render_markdown(result))
+def _remap_rendering_spans(content: dict, *, markdown: str, input_url: str) -> None:
+    """Keep Markdown character spans aligned in a redacted content result."""
+    starts = [match.start() for match in re.finditer(re.escape(input_url), markdown)]
+    if not starts:
+        return
+    replacement_length = len(redact_input_reference(input_url))
+    length_delta = replacement_length - len(input_url)
+    if not length_delta:
+        return
+
+    def remap(position: int) -> int:
+        index = bisect_right(starts, position) - 1
+        if index < 0:
+            return position
+        start = starts[index]
+        if position < start + len(input_url):
+            return start + index * length_delta + min(position - start, replacement_length)
+        return position + (index + 1) * length_delta
+
+    pending: list[object] = [content]
+    while pending:
+        element = pending.pop()
+        if isinstance(element, list):
+            pending.extend(element)
+            continue
+        if not isinstance(element, dict):
+            continue
+        spans = list(element.get("spans") or [])
+        if element.get("span") is not None:
+            spans.append(element["span"])
+        for span in spans:
+            offset = span.get("offset", 0)
+            end = offset + span.get("length", 0)
+            span["offset"] = remap(offset)
+            span["length"] = remap(end) - span["offset"]
+        for key, value in element.items():
+            if key in {"fields", "valueObject"}:
+                if isinstance(value, dict):
+                    pending.extend(value.values())
+            elif key not in {"span", "spans", "metadata", "valueJson", "content"}:
+                if isinstance(value, (dict, list)):
+                    pending.append(value)
+
+
+def _redact_remote_result(result, *, input_url: str):
+    plain = to_jsonable(result)
+    redacted = _redact_output_payload(plain, input_url=input_url)
+    if not isinstance(plain, dict):
+        return redacted
+    original_result = plain
+    redacted_result = redacted
+    if "contents" not in plain and isinstance(plain.get("result"), dict):
+        original_result = plain["result"]
+        redacted_result = redacted["result"]
+    for original, content in zip(
+        original_result.get("contents") or [], redacted_result.get("contents") or [], strict=True,
+    ):
+        _remap_rendering_spans(
+            content, markdown=original.get("markdown") or "", input_url=input_url,
+        )
+    return redacted
+
+
+def _render_remote_markdown(result, *, input_url: str) -> str:
+    from azure.ai.contentunderstanding.models import AnalysisResult
+
+    return render_markdown(AnalysisResult(_redact_remote_result(result, input_url=input_url)))
+
+
+def _write_markdown_stdout(result, *, input_url: str) -> None:
+    body = _render_remote_markdown(result, input_url=input_url)
     sys.stdout.write(body)
     if not body.endswith("\n"):
         sys.stdout.write("\n")
@@ -568,12 +645,13 @@ def cmd_analyze(
             result = response
         if fmt == "json":
             dump_json(
-                _redact_output_payload(result) if job.input_url is not None else result
+                _redact_remote_result(result, input_url=job.input_url)
+                if job.input_url is not None else result
             )
         else:
             try:
                 if job.input_url is not None:
-                    _write_markdown_stdout(result)
+                    _write_markdown_stdout(result, input_url=job.input_url)
                 else:
                     dump_markdown(result)
             except EmptyMarkdownOutputError as exc:
@@ -636,14 +714,15 @@ def cmd_analyze(
                 result = outcome.result
             if fmt == "json":
                 dump_json(
-                    _redact_output_payload(result) if job.input_url is not None else result,
+                    _redact_remote_result(result, input_url=job.input_url)
+                    if job.input_url is not None else result,
                     out=job.out_path,
                 )
             else:
                 job.out_path.parent.mkdir(parents=True, exist_ok=True)
                 job.out_path.write_text(
                     (
-                        redact_sensitive_urls(render_markdown(result))
+                        _render_remote_markdown(result, input_url=job.input_url)
                         if job.input_url is not None
                         else render_markdown(result)
                     ),

@@ -32,6 +32,7 @@ _RESULT_SUFFIX = {
     ResultView.FULL: ".result.json",
 }
 _GENERATED_RESULT_SUFFIXES = tuple(_RESULT_SUFFIX.values())
+_MAX_GENERATED_RESULT_NAME_BYTES = 240
 _MAX_URL_LENGTH = 8192
 _WINDOWS_DRIVE_PATH = re.compile(r"^[a-zA-Z]:[\\/]")
 _WINDOWS_RESERVED_NAMES = {
@@ -67,7 +68,7 @@ def redact_input_reference(value: str | Path) -> str:
     return urlunsplit((parsed.scheme, netloc, parsed.path, query, ""))
 
 
-_HTTPS_URL_IN_TEXT = re.compile(r"https://[^\s\"'<>]+", re.IGNORECASE)
+_HTTPS_URL_IN_TEXT = re.compile(r"https://[^\s\"<>]+", re.IGNORECASE)
 
 
 def redact_sensitive_urls(text: str) -> str:
@@ -391,6 +392,13 @@ def _result_path(path: Path, view: ResultView) -> Path:
     return Path(f"{path}{_RESULT_SUFFIX[view]}")
 
 
+def _hashed_result_path(path: Path, view: ResultView, digest: str) -> Path:
+    suffix = f".{digest}{_RESULT_SUFFIX[view]}"
+    name_budget = _MAX_GENERATED_RESULT_NAME_BYTES - len(suffix)
+    name = path.name.encode("utf-8")[:name_budget].decode("utf-8", errors="ignore")
+    return path.with_name(f"{name}{suffix}")
+
+
 def plan_outputs(
     input_plan: InputPlan,
     *,
@@ -427,7 +435,11 @@ def plan_outputs(
                 raise ValidationError(
                     f"source-relative output path is invalid: {relative}"
                 )
-            destination = _result_path(Path(output_dir) / relative, view)
+            if item.is_remote:
+                digest = hashlib.sha256(item.reference.encode("utf-8")).hexdigest()[:16]
+                destination = _hashed_result_path(Path(output_dir) / relative, view, digest)
+            else:
+                destination = _result_path(Path(output_dir) / relative, view)
         elif stream_single and len(input_plan.inputs) == 1:
             destination = None
         else:
@@ -440,20 +452,36 @@ def plan_outputs(
 
     counts = Counter(path for path in destinations if path is not None)
     collided = {path for path, count in counts.items() if count > 1}
-    for index, destination in enumerate(destinations):
-        if destination not in collided:
-            continue
+    reserved = set(counts)
+    for index, destination in sorted(
+        ((index, path) for index, path in enumerate(destinations) if path in collided),
+        key=lambda entry: input_plan.inputs[entry[0]].reference,
+    ):
         item = input_plan.inputs[index]
-        collision_identity = (
-            f"{redact_input_reference(item.reference)}\0{index}"
-            if item.is_remote
-            else item.reference
-        )
-        digest = hashlib.sha1(collision_identity.encode("utf-8")).hexdigest()[:8]
+        if item.is_remote:
+            continue
+        digest = hashlib.sha1(item.reference.encode("utf-8")).hexdigest()
         suffix = _RESULT_SUFFIX[view]
         assert destination is not None
-        base = destination.name[: -len(suffix)]
-        destinations[index] = destination.with_name(f"{base}.{digest}{suffix}")
+        base = destination.with_name(destination.name[: -len(suffix)])
+        for digest_length in range(8, len(digest) + 1, 8):
+            candidate = _hashed_result_path(base, view, digest[:digest_length])
+            if candidate not in reserved:
+                destinations[index] = candidate
+                reserved.add(candidate)
+                break
+        else:
+            raise ValidationError(
+                "cannot resolve result output path collision.",
+                hint="analyze these inputs separately with distinct --output-file paths.",
+            )
+
+    resolved = [path for path in destinations if path is not None]
+    if len(set(resolved)) != len(resolved):
+        raise ValidationError(
+            "multiple inputs resolve to the same result output path.",
+            hint="analyze these inputs separately with distinct --output-file paths.",
+        )
 
     outputs: list[PlannedOutput] = []
     for item, destination in zip(input_plan.inputs, destinations, strict=True):

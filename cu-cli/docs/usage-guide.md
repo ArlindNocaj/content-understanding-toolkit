@@ -354,6 +354,19 @@ still sent to Content Understanding. If the service cannot read the input,
 verify the SAS start and expiry times, read permission, and Azure Storage network
 rules.
 
+With `--output-dir`, each remote result uses
+`<filename>.<url-hash>.result.json` (or `.result.md`). The hash is the first 16
+hexadecimal characters of SHA-256 over the complete input URL, including its
+query string. Names stay stable across input ordering and batch sizes; changing
+the URL or renewing its SAS changes the hash. Query parameters are not written
+in plaintext in the filename. Explicit `--output-file` names are unchanged.
+The filename portion is truncated as needed so generated names containing a
+hash fit within 240 UTF-8 bytes, leaving room for atomic-write temporary names.
+If a local result would use the same path as a remote result, only the local
+result is renamed. Unresolvable output collisions fail before analysis.
+Results created under the previous naming rule are not automatically migrated
+or reused; a new analysis may incur additional charges.
+
 For multiple inputs that include a URL, specify `--output-dir` because a remote
 result cannot be written next to its source. A dry run reports remote sizes as
 unavailable and does not probe or download remote content:

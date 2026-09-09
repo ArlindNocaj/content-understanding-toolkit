@@ -87,7 +87,7 @@ def _scrub_host(text: str) -> str:
     return text
 
 
-_URL_RE = re.compile(r"https?://[^\s\"'\\]+")
+_URL_RE = re.compile(r"https?://[^\s\"\\]+")
 
 
 def _scrub_sensitive_query(text: str) -> str:
