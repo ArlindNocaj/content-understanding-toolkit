@@ -131,7 +131,9 @@ The command names and capabilities overlap, but frontend conventions differ:
 
 Run `cu <command> --help` or `az cu <command> --help` when translating a command
 between frontends. Profile values are shared; authentication sessions are not,
-so sign in with `az login` before using `az cu`.
+so sign in with `az login` before using `az cu`. For Azure CLI-specific
+installation and command examples, see the
+[Azure Content Understanding extension README](packages/azure-cli-extension/README.md).
 
 ## Supported Content Understanding API versions
 
