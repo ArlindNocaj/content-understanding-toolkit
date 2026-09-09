@@ -31,7 +31,10 @@ APPROVED_COMMAND_PATHS: tuple[tuple[str, ...], ...] = (
     ("profile", "sync-defaults"),
     ("doctor",),
     ("env-var", "list"),
+    ("infra", "generate"),
 )
+
+INTERNAL_COMMAND_PATHS: tuple[tuple[str, ...], ...] = (("_infra-models",),)
 
 # COMMAND_SPECS is used for drift checks only. Registration remains explicit so
 # adding a shared command never makes it public in the extension by accident.
@@ -94,4 +97,10 @@ def load_command_table(loader, _):
             "list_environment_variables",
             table_transformer="azext_content_understanding._format#environment_table",
         )
+
+    with loader.command_group("cu infra", is_preview=True) as group:
+        group.custom_command("generate", "generate_infrastructure")
+
+    with loader.command_group("cu", is_preview=True) as group:
+        group.custom_command("_infra-models", "setup_infrastructure_models")
     return loader.command_table

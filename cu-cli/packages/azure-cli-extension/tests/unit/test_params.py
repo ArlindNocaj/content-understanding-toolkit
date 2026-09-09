@@ -9,7 +9,7 @@ from typing import Any, Iterator
 import pytest
 
 from azext_content_understanding._params import load_arguments
-from azext_content_understanding.commands import APPROVED_COMMAND_PATHS
+from azext_content_understanding.commands import APPROVED_COMMAND_PATHS, INTERNAL_COMMAND_PATHS
 
 
 class FakeContext:
@@ -65,5 +65,5 @@ def test_loader_initialization_registers_the_complete_approved_surface() -> None
     load_arguments(loader, None)
 
     assert set(loader.seen_commands) == {
-        "cu " + " ".join(path) for path in APPROVED_COMMAND_PATHS
+        "cu " + " ".join(path) for path in (*APPROVED_COMMAND_PATHS, *INTERNAL_COMMAND_PATHS)
     }

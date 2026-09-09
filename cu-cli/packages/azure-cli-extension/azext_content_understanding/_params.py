@@ -305,6 +305,90 @@ def _load_command_arguments(loader, command: str) -> None:
                 )
         elif command == "cu profile sync-defaults":
             _optional_profile_name(context, PROFILE_SYNC_DEFAULTS)
+        elif command == "cu infra generate":
+            context.argument(
+                "output_dir",
+                options_list=["--output-dir", "-d"],
+                default="provision",
+                help="Directory where the azd/Bicep project is generated.",
+            )
+            context.argument(
+                "environment",
+                options_list=["--environment", "-e"],
+                help="azd environment name; prompted on a TTY and otherwise defaults to 'dev'.",
+            )
+            context.argument(
+                "location",
+                options_list=["--location", "-l"],
+                help="Content Understanding Azure region.",
+            )
+            context.argument(
+                "api_version",
+                options_list=["--api-version"],
+                help="Content Understanding service API version written to the azd environment.",
+            )
+            context.argument(
+                "models",
+                options_list=["--models"],
+                help="'recommended', 'none', or comma-separated model or model@version selectors.",
+            )
+            context.argument(
+                "foundry_endpoint",
+                options_list=["--foundry-endpoint"],
+                help="Existing Microsoft Foundry endpoint; mutually exclusive with --foundry-prefix.",
+            )
+            context.argument(
+                "foundry_prefix",
+                options_list=["--foundry-prefix"],
+                help="Prefix for a new Microsoft Foundry resource.",
+            )
+            context.argument(
+                "assign_roles",
+                options_list=["--assign-roles"],
+                action="store_true",
+                default=None,
+                help="Configure RBAC role assignments in the generated project.",
+            )
+            context.argument(
+                "force",
+                options_list=["--force"],
+                action="store_true",
+                help="Replace an existing generated project and azd environment state.",
+            )
+            context.argument(
+                "yes",
+                options_list=["--yes", "-y"],
+                action="store_true",
+                help="Use deterministic defaults without showing the interactive wizard.",
+            )
+        elif command == "cu _infra-models":
+            for parser_name, option in (
+                ("resource_group", "--resource-group"),
+                ("account_name", "--account"),
+                ("selection", "--selection"),
+                ("out_path", "--out"),
+                ("endpoint", "--endpoint"),
+                ("api_version", "--api-version"),
+            ):
+                context.argument(
+                    parser_name,
+                    options_list=[option],
+                    required=parser_name not in {"api_version"},
+                    help=f"Internal infrastructure model setup value: {parser_name}.",
+                )
+            context.argument(
+                "deploy",
+                options_list=["--deploy"],
+                action="store_true",
+                default=True,
+                help="Deploy selected models before writing the Bicep model file.",
+            )
+            context.argument(
+                "use_key",
+                options_list=["--use-key"],
+                action="store_true",
+                help="Use an account key for the Content Understanding data-plane request.",
+            )
 
 
 def _input_arguments(context, spec, *, include_urls: bool) -> None:
@@ -343,7 +427,7 @@ def _optional_profile_name(context, spec) -> None:
 def load_arguments(loader, command) -> None:
     """Register arguments for the complete approved CLI surface."""
 
-    from .commands import APPROVED_COMMAND_PATHS
+    from .commands import APPROVED_COMMAND_PATHS, INTERNAL_COMMAND_PATHS
 
     logger.debug(
         "Loading Content Understanding arguments for requested command %r "
@@ -358,4 +442,6 @@ def load_arguments(loader, command) -> None:
     )
 
     for path in APPROVED_COMMAND_PATHS:
+        _load_command_arguments(loader, "cu " + " ".join(path))
+    for path in INTERNAL_COMMAND_PATHS:
         _load_command_arguments(loader, "cu " + " ".join(path))

@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 from cu_cli_core.serialization import to_plain_value
 
-from . import _analysis, _analyzers, _defaults, _diagnostics, _profiles
+from . import _analysis, _analyzers, _defaults, _diagnostics, _infra, _infra_models, _profiles
 from ._errors import azure_cli_error
 
 
@@ -110,6 +110,14 @@ def sync_profile_defaults(cmd: Any, **kwargs: Any) -> Any:
 
 def doctor(cmd: Any, **kwargs: Any) -> Any:
     return _invoke(_diagnostics.doctor, cmd, kwargs)
+
+
+def generate_infrastructure(cmd: Any, **kwargs: Any) -> Any:
+    return _invoke(_infra.generate_infrastructure, cmd, kwargs)
+
+
+def setup_infrastructure_models(cmd: Any, **kwargs: Any) -> Any:
+    return _invoke(_infra_models.setup_models, cmd, kwargs)
 
 
 def list_environment_variables(cmd: Any, **kwargs: Any) -> Any:

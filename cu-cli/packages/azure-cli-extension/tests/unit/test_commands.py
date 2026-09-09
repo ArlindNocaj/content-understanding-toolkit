@@ -12,6 +12,7 @@ import yaml
 from azext_content_understanding import _help  # noqa: F401
 from azext_content_understanding.commands import (
     APPROVED_COMMAND_PATHS,
+    INTERNAL_COMMAND_PATHS,
     SHARED_COMMAND_PATHS,
     load_command_table,
 )
@@ -42,8 +43,10 @@ def test_approved_preview_commands_are_registered_from_explicit_allowlist() -> N
 
     command_table = load_command_table(loader, [])
 
-    assert set(command_table) == {"cu " + " ".join(path) for path in APPROVED_COMMAND_PATHS}
-    assert set(APPROVED_COMMAND_PATHS) - {("doctor",)} <= SHARED_COMMAND_PATHS
+    assert set(command_table) == {
+        "cu " + " ".join(path) for path in (*APPROVED_COMMAND_PATHS, *INTERNAL_COMMAND_PATHS)
+    }
+    assert set(APPROVED_COMMAND_PATHS) - {("doctor",), ("infra", "generate")} <= SHARED_COMMAND_PATHS
     assert command_table["cu analyzer list"]["table_transformer"].endswith(
         "#analyzer_list_table"
     )
@@ -51,14 +54,14 @@ def test_approved_preview_commands_are_registered_from_explicit_allowlist() -> N
 
 
 @pytest.mark.unit
-def test_deferred_and_not_planned_commands_are_not_registered() -> None:
+def test_infrastructure_generation_is_registered_but_obsolete_commands_are_not() -> None:
     loader = FakeLoader()
 
     command_table = load_command_table(loader, [])
 
-    assert "cu infra generate" not in command_table
+    assert "cu infra generate" in command_table
+    assert "cu _infra-models" in command_table
     assert "cu provision" not in command_table
-    assert "cu _infra-models" not in command_table
     assert "cu _has-values" not in command_table
     assert "cu upgrade" not in command_table
 

@@ -177,3 +177,24 @@ helps["cu env-var list"] = """
     type: command
     short-summary: List set CU environment variables with secret values redacted.
 """
+
+helps["cu infra"] = """
+    type: group
+    short-summary: Generate infrastructure-as-code for Content Understanding.
+"""
+
+helps["cu infra generate"] = """
+    type: command
+    short-summary: Generate an azd/Bicep project for Content Understanding.
+    long-summary: |
+      Writes a self-contained project and returns a structured summary. This
+      command does not provision resources or run azd. On a terminal it offers
+      subscription, resource, region, and model choices; use --yes for scripts.
+    examples:
+      - name: Interactively generate a project.
+        text: az cu infra generate
+      - name: Generate a deterministic project for a new resource.
+        text: az cu infra generate --yes --location eastus2 --models recommended --output-dir provision
+      - name: Generate a project targeting an existing Foundry resource.
+        text: az cu infra generate --foundry-endpoint https://contoso.services.ai.azure.com/ --models none
+"""
