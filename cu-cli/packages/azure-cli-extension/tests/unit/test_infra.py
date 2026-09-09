@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,7 +38,8 @@ def test_write_project_materializes_canonical_template(tmp_path: Path) -> None:
     assert "azure.yaml" in written
     assert "infra/main.bicep" in written
     assert "hooks/postprovision.sh" in written
-    assert (target / "hooks/postprovision.sh").stat().st_mode & 0o100
+    if os.name != "nt":
+        assert (target / "hooks/postprovision.sh").stat().st_mode & 0o100
     posix_hook = (target / "hooks/postprovision.sh").read_text(encoding="utf-8")
     powershell_hook = (target / "hooks/postprovision.ps1").read_text(encoding="utf-8")
     readme = (target / "README.md").read_text(encoding="utf-8")
