@@ -173,7 +173,7 @@ flowchart LR
     class HITL review
 ```
 
-Every routed row carries a `route_reason` — `null_policy_stp`, `raw_above_threshold`, `non_null_uncalibrated`, `missing_confidence`, `unknown_field` — so any decision can be explained later. To force a field to always be reviewed, leave it out of the table: it routes to review as `unknown_field`.
+Every routed row carries a `route_reason` — `null_policy_stp`, `raw_above_threshold`, `non_null_uncalibrated`, `missing_confidence`, `unknown_field` — so any decision can be explained later. To force a field to always be reviewed, leave it out of the table: it routes to review as `unknown_field`. A filled-in value that came back without a confidence score always routes to review as `missing_confidence`, whatever the field's decision — it contributed no evidence to the policy, so the policy cannot speak for it.
 
 ## Bring your own data
 

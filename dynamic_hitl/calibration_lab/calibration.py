@@ -359,13 +359,15 @@ def route_frame(
             if _is_null(row["extracted_value"]):
                 route_to_hitl = policy["null_policy"]["decision"] != "null_to_stp"
                 reason = "null_policy_review" if route_to_hitl else "null_policy_stp"
+            elif _is_null(row["confidence"]):
+                # A value CU returned no confidence for contributed no evidence
+                # to this field's policy, so no policy can vouch for it.
+                reason = "missing_confidence"
             elif policy.get("decision") == "always_trust":
                 route_to_hitl = False
                 reason = "always_trust"
             elif policy.get("decision") == "calibrate":
-                if _is_null(row["confidence"]):
-                    reason = "missing_confidence"
-                elif policy.get("score_mode") == "raw_confidence":
+                if policy.get("score_mode") == "raw_confidence":
                     route_to_hitl = float(row["confidence"]) < float(policy["threshold"])
                     reason = (
                         "raw_below_threshold" if route_to_hitl else "raw_above_threshold"

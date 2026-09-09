@@ -212,8 +212,11 @@ def _compute_field_signal(
 
     sub = df_full[df_full["field_name"] == field_name].copy()
     is_null = sub["extracted_value"].apply(_is_null_value).to_numpy()
+    no_confidence = sub["confidence"].apply(_is_null_value).to_numpy()
     sub_null = sub.loc[is_null]
-    sub_nonnull = sub.loc[~is_null].dropna(subset=["confidence"])
+    # Same test the router uses to emit `missing_confidence`, so the threshold is
+    # measured on exactly the population it will later be applied to.
+    sub_nonnull = sub.loc[~is_null & ~no_confidence]
 
     # ── Null track (Wilson 95% CI on null precision) ─────────────────────────
     n_nulls = int(len(sub_null))
@@ -654,13 +657,20 @@ def estimate_hitl_savings(
     Every field present in ``df_full`` is bucketed and its expected HITL
     routings counted:
 
-      * **calibrate**      → non-null HITL = ``hitl_load × n_nonnull``
-                              (the policy's own estimate);
-                              null HITL governed by the null-policy.
-      * **always_trust**   → 0 non-null HITL; null HITL governed by the
+      * **calibrate**      → non-null HITL = ``hitl_load × n_scored``
+                              (the policy's own estimate) plus every
+                              unscored row; null HITL governed by the
                               null-policy.
+      * **always_trust**   → non-null HITL = the unscored rows only; null
+                              HITL governed by the null-policy.
       * everything else    → 100% HITL (always_review,
                               insufficient_data, no_policy).
+
+    A non-null row CU returned without a confidence score contributed no
+    evidence to the field's policy, so :func:`calibration.route_frame` sends
+    it to review as ``missing_confidence`` whatever the field decided. This
+    forecast counts those rows as review for the same reason — crediting them
+    would claim automation the router will never deliver.
 
     ``hitl_load`` comes from the threshold sweep in
     :func:`build_routing_policy`, which both fits and measures on the same
@@ -670,8 +680,9 @@ def estimate_hitl_savings(
     Parameters
     ----------
     df_full : the unfiltered comparison frame used to fit the policies
-        (must contain ``field_name`` and ``extracted_value``). The row
-        counts here define the field volume per form.
+        (must contain ``field_name``, ``extracted_value`` and
+        ``confidence``). The row counts here define the field volume per
+        form.
     policies : ``{field_name: policy_dict}`` from
         :func:`build_routing_policies`.
 
@@ -679,23 +690,32 @@ def estimate_hitl_savings(
     -------
     dict with keys:
         per_field : DataFrame, one row per field in ``df_full`` with
-            columns: field, bucket, n_total, n_nonnull, n_nulls,
-            null_savings, lr_savings, expected_hitl, baseline_hitl,
-            hitl_savings_pct. ``null_savings + lr_savings + expected_hitl
-            == baseline_hitl`` for every row.
-        portfolio : dict with n_total, expected_hitl, baseline_hitl,
-            null_savings, lr_savings, null_savings_pct, lr_savings_pct,
-            hitl_load, hitl_savings_pct, plus per-bucket field counts.
-            ``null_savings_pct + lr_savings_pct + hitl_load == 1.0``.
+            columns: field, bucket, n_total, n_nonnull, n_unscored,
+            n_nulls, null_savings, lr_savings, expected_hitl,
+            baseline_hitl, hitl_savings_pct. ``null_savings + lr_savings +
+            expected_hitl == baseline_hitl`` for every row.
+        portfolio : dict with n_total, n_unscored, expected_hitl,
+            baseline_hitl, null_savings, lr_savings, null_savings_pct,
+            lr_savings_pct, hitl_load, hitl_savings_pct, plus per-bucket
+            field counts. ``null_savings_pct + lr_savings_pct + hitl_load
+            == 1.0``.
     """
+    required = {"field_name", "extracted_value", "confidence"}
+    missing = required - set(df_full.columns)
+    if missing:
+        raise KeyError(f"df_full is missing required columns: {sorted(missing)}")
+
     rows: list[dict] = []
 
     for field_name in sorted(df_full["field_name"].dropna().unique()):
         sub = df_full[df_full["field_name"] == field_name]
         is_null = sub["extracted_value"].apply(_is_null_value).to_numpy()
+        no_confidence = sub["confidence"].apply(_is_null_value).to_numpy()
         n_total = int(len(sub))
         n_nulls = int(is_null.sum())
         n_nonnull = n_total - n_nulls
+        n_unscored = int((~is_null & no_confidence).sum())
+        n_scored = n_nonnull - n_unscored
 
         pol = policies.get(field_name)
 
@@ -715,14 +735,15 @@ def estimate_hitl_savings(
             null_savings = n_nulls - null_hitl  # nulls routed to STP
             if decision == "calibrate":
                 bucket = "calibrate"
-                # hitl_load is the OOF non-null HITL fraction for this field.
-                nonnull_hitl = int(round(float(pol["hitl_load"]) * n_nonnull))
-                lr_savings = n_nonnull - nonnull_hitl
-                expected_hitl = nonnull_hitl + null_hitl
+                # hitl_load is the OOF HITL fraction among *scored* non-null
+                # rows; unscored rows are review whatever the cutoff says.
+                scored_hitl = int(round(float(pol["hitl_load"]) * n_scored))
+                lr_savings = n_scored - scored_hitl
+                expected_hitl = scored_hitl + n_unscored + null_hitl
             elif decision == "always_trust":
                 bucket = "always_trust"
-                lr_savings = n_nonnull
-                expected_hitl = null_hitl
+                lr_savings = n_scored
+                expected_hitl = n_unscored + null_hitl
             else:
                 # always_review, insufficient_data, etc.: non-null → HITL.
                 bucket = decision or "no_policy"
@@ -738,6 +759,7 @@ def estimate_hitl_savings(
                 "bucket":           bucket,
                 "n_total":          n_total,
                 "n_nonnull":        n_nonnull,
+                "n_unscored":       n_unscored,
                 "n_nulls":          n_nulls,
                 "null_savings":     int(null_savings),
                 "lr_savings":       int(lr_savings),
@@ -763,6 +785,7 @@ def estimate_hitl_savings(
     bucket_counts = per_field["bucket"].value_counts().to_dict()
     portfolio = {
         "n_total":                total_baseline,
+        "n_unscored":             int(per_field["n_unscored"].sum()),
         "expected_hitl":          total_expected,
         "baseline_hitl":          total_baseline,
         "null_savings":           total_null_savings,

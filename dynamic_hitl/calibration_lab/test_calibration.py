@@ -107,6 +107,42 @@ def test_routing_falls_back_to_review(base: dict) -> None:
     assert set(routed["route_reason"]) == {"unknown_field", "missing_confidence"}
 
 
+def test_a_trusted_field_still_reviews_values_with_no_confidence() -> None:
+    """always_trust is earned on scored rows; it cannot vouch for unscored ones."""
+    policies = {
+        "trusted": {
+            "field_name": "trusted",
+            "decision": "always_trust",
+            "threshold": None,
+            "score_mode": "raw_confidence",
+            "null_policy": {"decision": "null_to_stp"},
+        }
+    }
+    frame = pd.DataFrame(
+        [
+            {
+                "document_id": "d1",
+                "split": "test",
+                "field_name": "trusted",
+                "extracted_value": "x",
+                "confidence": 0.99,
+                "is_correct": True,
+            },
+            {
+                "document_id": "d1",
+                "split": "test",
+                "field_name": "trusted",
+                "extracted_value": "x",
+                "confidence": None,
+                "is_correct": False,
+            },
+        ]
+    )
+    routed = calib.route_frame(frame, policies, split="test")
+    assert list(routed["route_to_hitl"]) == [False, True]
+    assert list(routed["route_reason"]) == ["always_trust", "missing_confidence"]
+
+
 def test_savings_attribution_is_exhaustive(base: dict, data: pd.DataFrame) -> None:
     policies = calib.select_policies(base, 0.80)
     per_field, portfolio = calib.savings_attribution(
@@ -117,6 +153,25 @@ def test_savings_attribution_is_exhaustive(base: dict, data: pd.DataFrame) -> No
     assert portfolio["null_savings_pct"] + portfolio["lr_savings_pct"] + portfolio[
         "hitl_load"
     ] == pytest.approx(1.0)
+
+
+def test_savings_never_credit_a_value_with_no_confidence(
+    base: dict, data: pd.DataFrame
+) -> None:
+    """The forecast must not claim automation the router will not deliver."""
+    policies = calib.select_policies(base, 0.80)
+    calibrated = next(f for f, p in policies.items() if p["decision"] == "calibrate")
+
+    train = calib.calibration_input(data, split="train")
+    stripped = train.copy()
+    target = stripped["field_name"] == calibrated
+    stripped.loc[target & stripped["extracted_value"].notna(), "confidence"] = None
+
+    per_field, _ = calib.savings_attribution(policies, stripped)
+    row = per_field.loc[per_field["field"] == calibrated].iloc[0]
+
+    assert row["n_unscored"] == row["n_nonnull"]
+    assert row["lr_savings"] == 0
 
 
 def test_the_dial_is_monotone_on_held_out_documents(base: dict, data: pd.DataFrame) -> None:
