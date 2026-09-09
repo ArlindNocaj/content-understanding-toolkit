@@ -3,11 +3,13 @@
 
 """Azure CLI command loader for the Content Understanding extension."""
 
+from importlib.metadata import version
+
 from azure.cli.core import AzCommandsLoader
 
 from ._help import helps as helps
 
-__version__ = "0.1.0b1"
+__version__ = version("content-understanding")
 
 
 class ContentUnderstandingCommandsLoader(AzCommandsLoader):

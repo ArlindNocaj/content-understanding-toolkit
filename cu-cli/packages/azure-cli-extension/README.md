@@ -1,85 +1,169 @@
 # Azure Content Understanding extension for Azure CLI
 
 This preview extension adds Azure Content Understanding commands under `az cu`.
-
-The preview supports analyzer management, local/URL/batch analysis, defaults,
-profiles, diagnostics, and analyzer copy with the identity, cloud, and active
-subscription selected by Azure CLI:
-
-```bash
-az login
-az cu analyzer list --endpoint https://<resource-name>.services.ai.azure.com/
-az cu analyzer show --name prebuilt-invoice
-az cu analyze --file invoice.pdf --analyzer-name prebuilt-invoice
-az cu analyze --url "https://storage.example/container/invoice.pdf?<sas>" --analyzer-name prebuilt-invoice
-az cu analyze --source documents --recursive --output-dir results --yes
-az cu defaults show --output table
-az cu infra generate --output-dir provision
-```
-
-A CU endpoint configured in a shared CU profile can also be reused:
-
-```bash
-az cu profile set --key endpoint --value https://<resource-name>.services.ai.azure.com/
-az cu analyzer list
-```
-
-Use standard Azure CLI output and query options:
-
-```bash
-az cu analyzer list --kind prebuilt --output table
-az cu analyzer list --query "[?analyzerId=='prebuilt-layout']"
-```
-
-Analyzer definitions can be created and deleted with native Azure CLI confirmation:
-
-```bash
-az cu analyzer create --name ContosoInvoice --schema analyzer.json
-az cu analyzer delete --name ContosoInvoice
-az cu analyzer delete --name ContosoInvoice --yes
-```
-
-Resource model-deployment defaults can be merged or replaced:
-
-```bash
-az cu defaults set --model gpt-5.2=gpt52 --model text-embedding-3-large=embedding3
-az cu defaults set --model gpt-5.2=gpt52 --replace
-```
-
-Preview 2 and Preview 3 capabilities include:
-
-```bash
-az cu analyzer validate --schema analyzer.json --spec
-az cu analyzer schema create --name ContosoInvoice --output-file analyzer.json
-az cu analyzer test --name ContosoInvoice --source samples --output-file report.json --yes
-az cu profile create --name dev
-az cu profile copy --source dev --destination prod
-az cu profile set-active --name prod
-az cu analyzer copy --source ContosoInvoice --destination ContosoInvoice_v2
-az cu doctor
-az cu env-var list
-```
-
-Remote inputs use explicit repeatable `--url` options. Azure Blob SAS query
-parameters are passed to the service but redacted from errors and reports.
-Large batches require native Azure CLI confirmation unless `--yes` is supplied.
-Analyzer and profile deletion also use native confirmation.
-
-`az cu infra generate` writes a self-contained azd/Bicep project and never runs
-`azd up` or provisions resources itself. On a terminal it offers subscription,
-resource, region, model, and RBAC choices; use `--yes` for deterministic
-automation. Generated hooks use the underscore-prefixed internal
-`az cu _infra-models` helper and do not require the standalone `cu-cli` package.
-
-This extension intentionally does not register direct provisioning or
-self-upgrade. Update it with `az extension update --name content-understanding`.
-
-The runtime does not import or depend on the standalone `cu_cli` package,
-Click, Rich, updater code, or standalone provisioning code. The extension wheel
-contains a build-time snapshot of the repository's canonical azd/Bicep template.
-Microsoft Entra authentication always uses the active Azure CLI host credential;
-the preview explicitly supports AzureCloud only.
+It uses the identity, cloud, and active subscription selected by Azure CLI and
+supports standard Azure CLI output formats and JMESPath queries.
 
 > [!IMPORTANT]
 > This package is an implementation preview. The `az cu` command name and public
 > Azure CLI extension registration remain subject to Azure CLI maintainer review.
+
+## Content Understanding concepts
+
+Content Understanding processes documents, images, audio, and video into
+structured output. An **analyzer** defines how a file is processed. A
+**prebuilt analyzer** is supplied by the service, while a **custom analyzer**
+uses a field schema defined for an application.
+
+Further reading:
+
+- [What is Content Understanding?](https://learn.microsoft.com/azure/ai-services/content-understanding/overview)
+- [Content Understanding terminology](https://learn.microsoft.com/azure/ai-services/content-understanding/glossary)
+
+## Install and connect
+
+Install Azure CLI, sign in, and install the extension wheel produced by this
+repository. After extension-index publication, installation by name will use
+`az extension add --name content-understanding`.
+
+```bash
+# Sign in and select the Azure subscription used by az cu commands.
+az login
+
+# Install a locally built preview extension wheel.
+az extension add --source ./content_understanding-0.1.0b1-py3-none-any.whl
+
+# Save the Microsoft Foundry endpoint in the default CU profile.
+az cu profile set \
+	--key endpoint \
+	--value https://<resource-name>.services.ai.azure.com/
+
+# Verify endpoint connectivity, authentication, and model readiness.
+az cu doctor --output table
+```
+
+## Use prebuilt analyzers
+
+Download the public sample invoice so the following examples are runnable from
+the current directory:
+
+```bash
+# Download the Azure Content Understanding sample invoice.
+curl --fail --location --output invoice.pdf \
+	https://raw.githubusercontent.com/Azure-Samples/azure-ai-content-understanding-assets/main/document/invoice.pdf
+```
+
+Inspect available analyzers and process the invoice:
+
+```bash
+# List all analyzers available on the configured resource.
+az cu analyzer list --output table
+
+# Show the prebuilt invoice analyzer definition.
+az cu analyzer show --name prebuilt-invoice
+
+# Analyze the downloaded invoice and return its complete structured result.
+az cu analyze \
+	--file invoice.pdf \
+	--analyzer-name prebuilt-invoice
+```
+
+Use standard Azure CLI queries to select results. This example lists the
+mortgage analyzer IDs documented under
+[`prebuilt-schema/2025-11-01/mortgage.us`](../../../prebuilt-schema/2025-11-01/mortgage.us):
+
+```bash
+# Return only analyzer IDs whose names start with prebuilt-mortgage.
+az cu analyzer list \
+	--query "[?starts_with(analyzerId, 'prebuilt-mortgage')].analyzerId" \
+	--output tsv
+```
+
+Analyze remote input without downloading it first:
+
+```bash
+# Analyze the public sample invoice directly from its HTTPS URL.
+az cu analyze \
+	--url https://raw.githubusercontent.com/Azure-Samples/azure-ai-content-understanding-assets/main/document/invoice.pdf \
+	--analyzer-name prebuilt-invoice
+```
+
+Azure Blob SAS parameters are sent to the service but redacted from reports and
+errors. Large batches require confirmation unless `--yes` is supplied.
+
+## Create a custom analyzer
+
+Custom analyzers require supported model deployments and Content Understanding
+defaults. Inspect defaults, create a schema, create an analyzer, and test it:
+
+```bash
+# Show the resource's model-to-deployment defaults.
+az cu defaults show --output table
+
+# Derive a starter extraction schema from the sample invoice.
+az cu analyzer schema create \
+	--from-sample invoice.pdf \
+	--output-file invoice-schema.json
+
+# Create a custom analyzer after reviewing and editing the generated schema.
+az cu analyzer create \
+	--name invoice_v1 \
+	--schema invoice-schema.json
+
+# Run the custom analyzer over the sample and write a structured test report.
+az cu analyzer test \
+	--name invoice_v1 \
+	--file invoice.pdf \
+	--output-file test-report.json \
+	--yes
+```
+
+## Generate Microsoft Foundry infrastructure
+
+`az cu infra generate` writes a self-contained azd/Bicep project. It does not
+provision resources or run `azd up`. On a terminal it offers subscription,
+resource, region, model, and RBAC choices; use `--yes` for deterministic
+automation.
+
+```bash
+# Generate the project interactively using Azure CLI subscription context.
+az cu infra generate --output-dir provision
+
+# Enter the generated project directory.
+cd provision
+
+# Authenticate Azure Developer CLI for infrastructure deployment.
+azd auth login
+
+# Provision the generated project and run its az cu post-provision setup.
+azd up
+```
+
+Generated hooks use the internal `az cu _infra-models` helper and do not require
+the standalone `cu-cli` package.
+
+## Command overview
+
+| Command | Purpose |
+| --- | --- |
+| `az cu analyze` | Analyze local files, directories, or HTTPS URLs. |
+| `az cu analyzer` | List, show, create, copy, delete, validate, and test analyzers and schemas. |
+| `az cu defaults` | Read or configure model-to-deployment defaults. |
+| `az cu profile` | Manage local endpoint, API version, and model settings. |
+| `az cu infra generate` | Generate an azd/Bicep project; the user runs `azd up`. |
+| `az cu doctor` | Return structured connectivity and readiness checks. |
+| `az cu env-var list` | Inspect recognized environment variables with secrets redacted. |
+
+This extension intentionally does not register direct provisioning or
+self-upgrade. Update an indexed installation with
+`az extension update --name content-understanding`.
+
+## Implementation boundary
+
+The runtime depends on `cu-cli-core`, not the standalone `cu_cli` package, and
+does not import Click or Rich. The wheel contains a build-time snapshot of the
+repository's canonical azd/Bicep template. Microsoft Entra authentication uses
+the active Azure CLI host credential. This preview supports AzureCloud only.
+
+For standalone CLI documentation and detailed CU workflows, see the
+[CU CLI README](../../README.md).
