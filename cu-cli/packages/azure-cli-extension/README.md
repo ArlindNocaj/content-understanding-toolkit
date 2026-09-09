@@ -14,6 +14,7 @@ az cu analyze --file invoice.pdf --analyzer-name prebuilt-invoice
 az cu analyze --url "https://storage.example/container/invoice.pdf?<sas>" --analyzer-name prebuilt-invoice
 az cu analyze --source documents --recursive --output-dir results --yes
 az cu defaults show --output table
+az cu infra generate --output-dir provision
 ```
 
 A CU endpoint configured in a shared CU profile can also be reused:
@@ -64,12 +65,18 @@ parameters are passed to the service but redacted from errors and reports.
 Large batches require native Azure CLI confirmation unless `--yes` is supplied.
 Analyzer and profile deletion also use native confirmation.
 
-This extension intentionally does not register infrastructure generation,
-provisioning, hidden post-provision helpers, or self-upgrade. Update it with
-`az extension update --name content-understanding`.
+`az cu infra generate` writes a self-contained azd/Bicep project and never runs
+`azd up` or provisions resources itself. On a terminal it offers subscription,
+resource, region, model, and RBAC choices; use `--yes` for deterministic
+automation. Generated hooks use the underscore-prefixed internal
+`az cu _infra-models` helper and do not require the standalone `cu-cli` package.
+
+This extension intentionally does not register direct provisioning or
+self-upgrade. Update it with `az extension update --name content-understanding`.
 
 The runtime does not import or depend on the standalone `cu_cli` package,
-Click, Rich, azd templates, updater code, or standalone provisioning code.
+Click, Rich, updater code, or standalone provisioning code. The extension wheel
+contains a build-time snapshot of the repository's canonical azd/Bicep template.
 Microsoft Entra authentication always uses the active Azure CLI host credential;
 the preview explicitly supports AzureCloud only.
 
