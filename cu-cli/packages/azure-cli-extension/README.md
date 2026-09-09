@@ -42,6 +42,47 @@ az cu profile set \
 az cu doctor --output table
 ```
 
+## Use `az cu` and `cu` interchangeably
+
+The Azure CLI extension and standalone CU CLI are two frontends over the same
+`cu-cli-core` operations. Install either frontend, or install both and move
+between them for the same analyzer, analysis, defaults, profile, diagnostics,
+and infrastructure-generation workflows.
+
+Both frontends read and write the same `[cu]` profile settings in the active
+Azure CLI configuration file (`~/.azure/config` by default, or the file under
+`AZURE_CONFIG_DIR`). An endpoint, API version, default analyzer, active profile,
+or model-deployment mapping saved with one frontend is immediately available to
+the other. For example:
+
+```bash
+# Save the endpoint with the Azure CLI extension.
+az cu profile set \
+	--key endpoint \
+	--value https://<resource-name>.services.ai.azure.com/
+
+# Use the same default profile with the standalone frontend.
+cu analyzer list
+
+# Change the default analyzer with the standalone frontend.
+cu profile set default_analyzer prebuilt-layout
+
+# Use that setting with the Azure CLI extension.
+az cu analyze --file document.pdf
+```
+
+The command names and capabilities overlap, but frontend conventions differ:
+
+| Azure CLI extension | Standalone CU CLI |
+| --- | --- |
+| Starts commands with `az cu`. | Starts commands with `cu` (`cu-cli` on macOS). |
+| Uses explicit options plus global Azure CLI `--output`, `--query`, and `--subscription`. | Supports standalone positional shortcuts and Rich/JSON output options. |
+| Always uses the active `az login` identity; shared API keys and `auth_mode` do not override Azure CLI host authentication. | Uses the profile's `auth_mode` and can use a saved API key. |
+
+Run `az cu <command> --help` or `cu <command> --help` when translating a command
+between frontends. Profile values are shared; authentication sessions are not,
+so sign in with `az login` before using `az cu`.
+
 ## Use prebuilt analyzers
 
 Download the public sample invoice so the following examples are runnable from
