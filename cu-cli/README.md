@@ -133,7 +133,7 @@ Run `cu <command> --help` or `az cu <command> --help` when translating a command
 between frontends. Profile values are shared; authentication sessions are not,
 so sign in with `az login` before using `az cu`. For Azure CLI-specific
 installation and command examples, see the
-[Azure Content Understanding extension README](packages/azure-cli-extension/README.md).
+[Azure Content Understanding extension README](https://github.com/Azure/content-understanding-toolkit/blob/main/cu-cli/packages/azure-cli-extension/README.md).
 
 ## Supported Content Understanding API versions
 
