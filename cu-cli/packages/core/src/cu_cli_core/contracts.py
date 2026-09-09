@@ -27,6 +27,7 @@ class InputOrigin(str, Enum):
     POSITIONAL_SOURCE = "positional-source"
     NAMED_FILE = "named-file"
     NAMED_SOURCE = "named-source"
+    NAMED_URL = "named-url"
 
 
 class ExistingResultPolicy(str, Enum):
@@ -162,6 +163,7 @@ class AnalyzeRequest:
     positional_inputs: tuple[Path, ...] = ()
     files: tuple[Path, ...] = ()
     sources: tuple[Path, ...] = ()
+    urls: tuple[str, ...] = ()
     pattern: str | None = None
     recursive: bool = False
     analyzer: str | None = None
@@ -184,6 +186,7 @@ class AnalyzeRequest:
         )
         object.__setattr__(self, "files", tuple(Path(path) for path in self.files))
         object.__setattr__(self, "sources", tuple(Path(path) for path in self.sources))
+        object.__setattr__(self, "urls", tuple(str(url) for url in self.urls))
         if self.output_file is not None:
             object.__setattr__(self, "output_file", Path(self.output_file))
         if self.output_dir is not None:
@@ -329,11 +332,24 @@ class EnvironmentVariableListRequest:
 
 @dataclass(frozen=True)
 class PlannedInput:
-    path: Path
-    source_root: Path
+    path: Path | None
+    source_root: Path | None
     relative_path: Path
     origin: InputOrigin
-    size_bytes: int
+    size_bytes: int | None
+    url: str | None = None
+
+    @property
+    def reference(self) -> str:
+        if self.url is not None:
+            return self.url
+        if self.path is None:
+            raise ValueError("planned input must have either a local path or URL.")
+        return str(self.path)
+
+    @property
+    def is_remote(self) -> bool:
+        return self.url is not None
 
 
 @dataclass(frozen=True)

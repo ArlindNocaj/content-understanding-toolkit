@@ -8,7 +8,10 @@ from fnmatch import fnmatch
 import hashlib
 import os
 from pathlib import Path
+import posixpath
+import re
 from typing import Iterable, Sequence
+from urllib.parse import urlsplit, urlunsplit
 
 from .contracts import (
     ExecutionPlan,
@@ -29,6 +32,95 @@ _RESULT_SUFFIX = {
     ResultView.FULL: ".result.json",
 }
 _GENERATED_RESULT_SUFFIXES = tuple(_RESULT_SUFFIX.values())
+_MAX_URL_LENGTH = 8192
+_WINDOWS_DRIVE_PATH = re.compile(r"^[a-zA-Z]:[\\/]")
+_WINDOWS_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{number}" for number in range(1, 10)),
+    *(f"LPT{number}" for number in range(1, 10)),
+}
+
+
+def redact_input_reference(value: str | Path) -> str:
+    """Return an input reference safe for diagnostics and persisted reports."""
+
+    text = os.fspath(value)
+    try:
+        parsed = urlsplit(text)
+    except ValueError:
+        if "://" not in text and not text.lower().startswith(("http:", "https:")):
+            return text
+        base = text.split("#", 1)[0].split("?", 1)[0]
+        scheme, separator, location = base.partition("://")
+        if separator and "@" in location:
+            base = f"{scheme}://{location.rsplit('@', 1)[-1]}"
+        return f"{base}?REDACTED" if "?" in text else base
+    if parsed.scheme.lower() not in {"http", "https"} and "://" not in text:
+        return text
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+    query = "REDACTED" if parsed.query else ""
+    return urlunsplit((parsed.scheme, netloc, parsed.path, query, ""))
+
+
+_HTTPS_URL_IN_TEXT = re.compile(r"https://[^\s\"'<>]+", re.IGNORECASE)
+
+
+def redact_sensitive_urls(text: str) -> str:
+    """Redact query strings from HTTPS URLs embedded in arbitrary text."""
+
+    return _HTTPS_URL_IN_TEXT.sub(
+        lambda match: redact_input_reference(match.group(0)),
+        text,
+    )
+
+
+def _validated_https_url(value: str, *, option: str) -> str:
+    if _WINDOWS_DRIVE_PATH.match(value):
+        raise ValidationError(f"{option} must be an absolute HTTPS URL.")
+    if any(character.isspace() for character in value):
+        raise ValidationError(
+            f"{option} is not a valid URL.",
+            hint="percent-encode spaces and provide an absolute HTTPS URL.",
+        )
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValidationError(
+            f"{option} is not a valid URL: {redact_input_reference(value)}",
+            hint="provide an absolute HTTPS URL such as https://host/path/file.pdf.",
+        ) from exc
+    if parsed.scheme.lower() != "https":
+        raise ValidationError(
+            f"{option} uses unsupported URL scheme '{parsed.scheme or '(missing)'}'.",
+            hint="Content Understanding remote inputs require an HTTPS URL.",
+        )
+    if not parsed.netloc or not hostname:
+        raise ValidationError(
+            f"{option} is not a valid HTTPS URL: {redact_input_reference(value)}",
+            hint="include a host, for example https://host/path/file.pdf.",
+        )
+    if parsed.username is not None or parsed.password is not None:
+        raise ValidationError(
+            f"{option} must not contain embedded user credentials.",
+            hint="use an HTTPS URL or Azure Blob SAS URL without URL user info.",
+        )
+    if len(value) > _MAX_URL_LENGTH:
+        raise ValidationError(
+            f"{option} URL exceeds the {_MAX_URL_LENGTH}-character service limit."
+        )
+    return value
+
+
+def _remote_relative_path(url: str) -> Path:
+    raw_name = posixpath.basename(urlsplit(url).path.rstrip("/")) or "remote-input"
+    safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", raw_name).rstrip(" .")
+    if not safe_name or safe_name in {".", ".."}:
+        safe_name = "remote-input"
+    if safe_name.split(".", 1)[0].upper() in _WINDOWS_RESERVED_NAMES:
+        safe_name = f"_{safe_name}"
+    return Path(safe_name)
 
 
 def _reject_direct_duplicates(values: Sequence[str | Path], option: str) -> None:
@@ -99,16 +191,19 @@ def plan_inputs(
     positional: Sequence[str | Path] = (),
     files: Sequence[str | Path] = (),
     sources: Sequence[str | Path] = (),
+    urls: Sequence[str] = (),
     pattern: str | None = None,
     recursive: bool = False,
 ) -> InputPlan:
     """Validate and expand one invocation's local input selection."""
-    if positional and (files or sources):
+    if positional and (files or sources or urls):
         conflicts = []
         if files:
             conflicts.append("--file")
         if sources:
             conflicts.append("--source")
+        if urls:
+            conflicts.append("--url")
         raise UsageError(
             "positional inputs cannot be combined with " + " or ".join(conflicts) + "."
         )
@@ -116,17 +211,17 @@ def plan_inputs(
         raise UsageError("--file and --source cannot be combined.")
     if pattern is not None and not sources:
         raise UsageError("--pattern is valid only with --source.")
-    if not positional and not files and not sources:
-        raise UsageError("provide positional inputs, --file, or --source.")
+    if not positional and not files and not sources and not urls:
+        raise UsageError("provide positional inputs, --file, --source, or --url.")
 
     if positional:
         mode = SelectionMode.POSITIONAL
         direct = positional
         option = "positional input"
-    elif files:
+    elif files or urls:
         mode = SelectionMode.NAMED_FILES
-        direct = files
-        option = "--file"
+        direct = (*files, *urls)
+        option = "input"
     else:
         mode = SelectionMode.NAMED_SOURCES
         direct = sources
@@ -146,7 +241,7 @@ def plan_inputs(
         origin: InputOrigin,
     ) -> None:
         resolved, size = _validated_file(path, option=option)
-        identity = _file_identity(resolved)
+        identity = ("file", _file_identity(resolved))
         if identity in seen:
             return
         seen.add(identity)
@@ -157,6 +252,23 @@ def plan_inputs(
                 relative_path=relative_path,
                 origin=origin,
                 size_bytes=size,
+            )
+        )
+
+    def add_url(url: str) -> None:
+        validated = _validated_https_url(url, option="--url")
+        identity = ("url", validated)
+        if identity in seen:
+            return
+        seen.add(identity)
+        selected.append(
+            PlannedInput(
+                path=None,
+                source_root=None,
+                relative_path=_remote_relative_path(validated),
+                origin=InputOrigin.NAMED_URL,
+                size_bytes=None,
+                url=validated,
             )
         )
 
@@ -194,15 +306,17 @@ def plan_inputs(
                     relative_path=Path(resolved.name),
                     origin=InputOrigin.POSITIONAL_FILE,
                 )
-    elif files:
+    elif files or urls:
         for value in files:
-            path, _ = _validated_file(Path(value), option=option)
+            path, _ = _validated_file(Path(value), option="--file")
             add_file(
                 path,
                 source_root=path.parent,
                 relative_path=Path(path.name),
                 origin=InputOrigin.NAMED_FILE,
             )
+        for value in urls:
+            add_url(value)
     else:
         effective_pattern = pattern if pattern is not None else "*"
         if not effective_pattern:
@@ -237,14 +351,14 @@ def plan_inputs(
         raise ValidationError("input selection did not find any files.")
 
     extension_counts = Counter(
-        item.path.suffix.lower() or "(none)" for item in selected
+        item.relative_path.suffix.lower() or "(none)" for item in selected
     )
     return InputPlan(
         mode=mode,
         inputs=tuple(selected),
         recursive=recursive,
         pattern=pattern,
-        total_bytes=sum(item.size_bytes for item in selected),
+        total_bytes=sum(item.size_bytes or 0 for item in selected),
         extension_counts=dict(sorted(extension_counts.items())),
         skipped=tuple(
             skipped[path]
@@ -272,6 +386,16 @@ def plan_outputs(
         raise UsageError("--output-file and --output-dir cannot be combined.")
     if output_file is not None and len(input_plan.inputs) != 1:
         raise UsageError("--output-file is valid only when exactly one file is selected.")
+    if (
+        output_file is None
+        and output_dir is None
+        and len(input_plan.inputs) > 1
+        and any(item.is_remote for item in input_plan.inputs)
+    ):
+        raise UsageError(
+            "--output-dir is required when multiple inputs include an HTTPS URL.",
+            hint="remote results cannot be written next to their source URL.",
+        )
 
     destinations: list[Path | None] = []
     for item in input_plan.inputs:
@@ -287,6 +411,10 @@ def plan_outputs(
         elif stream_single and len(input_plan.inputs) == 1:
             destination = None
         else:
+            if item.path is None:
+                raise UsageError(
+                    "remote input requires --output-file or --output-dir when not streamed."
+                )
             destination = _result_path(item.path, view)
         destinations.append(destination)
 
@@ -295,9 +423,13 @@ def plan_outputs(
     for index, destination in enumerate(destinations):
         if destination not in collided:
             continue
-        digest = hashlib.sha1(
-            os.fspath(input_plan.inputs[index].path).encode("utf-8")
-        ).hexdigest()[:8]
+        item = input_plan.inputs[index]
+        collision_identity = (
+            f"{redact_input_reference(item.reference)}\0{index}"
+            if item.is_remote
+            else item.reference
+        )
+        digest = hashlib.sha1(collision_identity.encode("utf-8")).hexdigest()[:8]
         suffix = _RESULT_SUFFIX[view]
         assert destination is not None
         base = destination.name[: -len(suffix)]

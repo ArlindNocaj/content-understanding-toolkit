@@ -30,7 +30,8 @@ setup(
     python_requires=">=3.10",
     packages=find_packages(),
     install_requires=[
-        "cu-cli-core>=0.1.0b1,<0.2.0",
+        "cu-cli-core>=0.1.0b2,<0.2.0",
+        "azure-mgmt-cognitiveservices>=13.6.0,<14.0.0",
     ],
     extras_require={
         "dev": [

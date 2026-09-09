@@ -1,5 +1,17 @@
 # Release History
 
+## 0.1.0b2 (2026-09-09)
+
+### Features Added
+
+- Added repeatable HTTPS and Azure Blob SAS URL inputs to `cu analyze`.
+- Expanded the framework-neutral command contracts used by native command-line frontends.
+
+### Other Changes
+
+- Redact URL query strings from dry-run plans, reports, and diagnostics.
+- Require the matching `cu-cli-core` preview version for the standalone CLI.
+
 ## 0.1.0b1 (2026-09-04)
 
 ### Features Added

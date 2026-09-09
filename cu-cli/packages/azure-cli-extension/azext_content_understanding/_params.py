@@ -3,17 +3,46 @@
 
 """Argument registration for the Content Understanding extension."""
 
+import logging
+
 from azure.cli.core.commands.parameters import get_enum_type
 
 from cu_cli_core.command_spec import (
     ANALYZE,
+    ANALYZER_COPY,
     ANALYZER_CREATE,
     ANALYZER_DELETE,
     ANALYZER_LIST,
+    ANALYZER_SCHEMA_CREATE,
     ANALYZER_SHOW,
+    ANALYZER_TEST,
+    ANALYZER_VALIDATE,
     DEFAULTS_SET,
+    PROFILE_COPY,
+    PROFILE_CREATE,
+    PROFILE_DELETE,
+    PROFILE_GET,
+    PROFILE_RENAME,
+    PROFILE_SET,
+    PROFILE_SET_ACTIVE,
+    PROFILE_SHOW,
+    PROFILE_SYNC_DEFAULTS,
+    PROFILE_UNSET,
 )
 from cu_cli_core.service_options import API_VERSION, ENDPOINT
+
+
+logger = logging.getLogger(__name__)
+
+
+class _ExplicitArgumentContext:
+    """Add arguments that are intentionally absent from variadic command wrappers."""
+
+    def __init__(self, context) -> None:
+        self._context = context
+
+    def argument(self, argument_dest, **kwargs) -> None:
+        self._context.extra(argument_dest, **kwargs)
 
 
 def _service_arguments(context) -> None:
@@ -48,9 +77,24 @@ def _named_analyzer_argument(context, spec) -> None:
     )
 
 
-def load_arguments(loader, command):
-    with loader.argument_context(command) as context:
-        _service_arguments(context)
+def _load_command_arguments(loader, command: str) -> None:
+    with loader.argument_context(command) as raw_context:
+        context = _ExplicitArgumentContext(raw_context)
+        if command in {
+            "cu analyze",
+            "cu analyzer list",
+            "cu analyzer show",
+            "cu analyzer create",
+            "cu analyzer delete",
+            "cu analyzer test",
+            "cu analyzer copy",
+            "cu analyzer schema create",
+            "cu defaults show",
+            "cu defaults set",
+            "cu doctor",
+            "cu profile sync-defaults",
+        }:
+            _service_arguments(context)
 
         if command == "cu analyzer list":
             kind = _argument(ANALYZER_LIST, "kind")
@@ -89,19 +133,122 @@ def load_arguments(loader, command):
                 action="store_true",
                 help=yes.help,
             )
-        elif command == "cu analyze":
-            file_argument = _argument(ANALYZE, "files")
+        elif command == "cu analyzer validate":
+            schema = _argument(ANALYZER_VALIDATE, "named_schema_path")
             context.argument(
-                "file_path",
-                options_list=[file_argument.name],
+                schema.parser_name,
+                options_list=[schema.name],
                 required=True,
-                help="Local file to analyze.",
+                help=schema.help,
             )
+            for parser_name in ("strict", "use_spec"):
+                argument = _argument(ANALYZER_VALIDATE, parser_name)
+                context.argument(
+                    parser_name,
+                    options_list=[argument.name],
+                    action="store_true",
+                    help=argument.help,
+                )
+        elif command == "cu analyzer schema create":
+            for parser_name in ("from_template", "force"):
+                argument = _argument(ANALYZER_SCHEMA_CREATE, parser_name)
+                context.argument(
+                    parser_name,
+                    options_list=[argument.name],
+                    action="store_true",
+                    help=argument.help,
+                )
+            for parser_name in ("sample_path", "analyzer_id", "base", "out_path"):
+                argument = _argument(ANALYZER_SCHEMA_CREATE, parser_name)
+                context.argument(
+                    parser_name,
+                    options_list=[argument.name],
+                    default=argument.default,
+                    help=argument.help,
+                )
+            for parser_name in ("modality", "template_type"):
+                argument = _argument(ANALYZER_SCHEMA_CREATE, parser_name)
+                context.argument(
+                    parser_name,
+                    options_list=[argument.name],
+                    arg_type=get_enum_type(argument.choices),
+                    default=argument.default,
+                    help=argument.help,
+                )
+        elif command == "cu analyzer test":
+            _named_analyzer_argument(context, ANALYZER_TEST)
+            _input_arguments(context, ANALYZER_TEST, include_urls=False)
+            for parser_name in ("dry_run", "force", "assume_yes"):
+                argument = _argument(ANALYZER_TEST, parser_name)
+                context.argument(
+                    parser_name,
+                    options_list=[argument.name],
+                    action="store_true",
+                    help=argument.help,
+                )
+            output = _argument(ANALYZER_TEST, "out_path")
+            context.argument(output.parser_name, options_list=[output.name], help=output.help)
+            concurrency = _argument(ANALYZER_TEST, "concurrency")
+            context.argument(
+                concurrency.parser_name,
+                options_list=[concurrency.name],
+                type=int,
+                default=concurrency.default,
+                help=concurrency.help,
+            )
+        elif command == "cu analyzer copy":
+            for parser_name in (
+                "named_source",
+                "named_destination",
+                "source_resource",
+                "source_subscription",
+                "source_resource_group",
+                "source_profile",
+                "destination_resource",
+                "destination_subscription",
+                "destination_resource_group",
+                "destination_profile",
+            ):
+                argument = _argument(ANALYZER_COPY, parser_name)
+                context.argument(
+                    parser_name,
+                    options_list=[argument.name],
+                    required=argument.required,
+                    help=argument.help,
+                )
+        elif command == "cu analyze":
+            _input_arguments(context, ANALYZE, include_urls=True)
             analyzer = _argument(ANALYZE, "analyzer_id")
             context.argument(
                 analyzer.parser_name,
-                options_list=["--analyzer-name", "-a"],
+                options_list=["--analyzer-name"],
                 help=analyzer.help,
+            )
+            for parser_name in ("inline", "show_usage", "llm_input", "dry_run", "assume_yes"):
+                argument = _argument(ANALYZE, parser_name)
+                context.argument(
+                    parser_name,
+                    options_list=[argument.name],
+                    action="store_true",
+                    help=argument.help,
+                )
+            for parser_name in ("output_file", "out_dir", "report_path"):
+                argument = _argument(ANALYZE, parser_name)
+                context.argument(parser_name, options_list=[argument.name], help=argument.help)
+            existing = _argument(ANALYZE, "on_existing")
+            context.argument(
+                existing.parser_name,
+                options_list=[existing.name],
+                arg_type=get_enum_type(existing.choices),
+                help=existing.help,
+            )
+            concurrency = _argument(ANALYZE, "concurrency")
+            context.argument(
+                concurrency.parser_name,
+                options_list=[concurrency.name],
+                type=int,
+                default=concurrency.default,
+                help=concurrency.help,
             )
         elif command == "cu defaults set":
             model = _argument(DEFAULTS_SET, "model_kv")
@@ -119,3 +266,96 @@ def load_arguments(loader, command):
                 action="store_true",
                 help=replace.help,
             )
+        elif command == "cu profile show":
+            _optional_profile_name(context, PROFILE_SHOW)
+        elif command in {"cu profile get", "cu profile unset"}:
+            spec = PROFILE_GET if command.endswith(" get") else PROFILE_UNSET
+            key = _argument(spec, "profile_key")
+            context.argument(key.parser_name, options_list=[key.name], required=True, help=key.help)
+            _optional_profile_name(context, spec)
+        elif command == "cu profile set":
+            for parser_name in ("profile_key", "profile_value"):
+                argument = _argument(PROFILE_SET, parser_name)
+                context.argument(
+                    parser_name,
+                    options_list=[argument.name],
+                    required=True,
+                    help=argument.help,
+                )
+            _optional_profile_name(context, PROFILE_SET)
+        elif command in {"cu profile create", "cu profile delete", "cu profile set-active"}:
+            spec = {
+                "cu profile create": PROFILE_CREATE,
+                "cu profile delete": PROFILE_DELETE,
+                "cu profile set-active": PROFILE_SET_ACTIVE,
+            }[command]
+            name = _argument(spec, "profile_name")
+            context.argument(name.parser_name, options_list=[name.name], required=True, help=name.help)
+            if command == "cu profile delete":
+                context.argument("yes", options_list=["--yes"], action="store_true", help="Skip confirmation.")
+        elif command in {"cu profile copy", "cu profile rename"}:
+            spec = PROFILE_COPY if command.endswith(" copy") else PROFILE_RENAME
+            for parser_name in ("source_profile", "destination_profile"):
+                argument = _argument(spec, parser_name)
+                context.argument(
+                    parser_name,
+                    options_list=[argument.name],
+                    required=argument.required,
+                    help=argument.help,
+                )
+        elif command == "cu profile sync-defaults":
+            _optional_profile_name(context, PROFILE_SYNC_DEFAULTS)
+
+
+def _input_arguments(context, spec, *, include_urls: bool) -> None:
+    for parser_name in ("files", "sources"):
+        argument = _argument(spec, parser_name)
+        context.argument(
+            parser_name,
+            options_list=[argument.name],
+            action="append",
+            help=argument.help,
+        )
+    if include_urls:
+        argument = _argument(spec, "urls")
+        context.argument(
+            argument.parser_name,
+            options_list=[argument.name],
+            action="append",
+            help=argument.help,
+        )
+    pattern = _argument(spec, "pattern")
+    context.argument(pattern.parser_name, options_list=[pattern.name], help=pattern.help)
+    recursive = _argument(spec, "recursive")
+    context.argument(
+        recursive.parser_name,
+        options_list=[recursive.name],
+        action="store_true",
+        help=recursive.help,
+    )
+
+
+def _optional_profile_name(context, spec) -> None:
+    name = _argument(spec, "profile_name")
+    context.argument(name.parser_name, options_list=[name.name], help=name.help)
+
+
+def load_arguments(loader, command) -> None:
+    """Register arguments for the complete approved CLI surface."""
+
+    from .commands import APPROVED_COMMAND_PATHS
+
+    logger.debug(
+        "Loading Content Understanding arguments for requested command %r "
+        "(active command %r, command string %r)",
+        command,
+        getattr(loader, "command_name", None),
+        getattr(
+            getattr(getattr(loader, "cli_ctx", None), "invocation", None),
+            "data",
+            {},
+        ).get("command_string"),
+    )
+
+    for path in APPROVED_COMMAND_PATHS:
+        _load_command_arguments(loader, "cu " + " ".join(path))

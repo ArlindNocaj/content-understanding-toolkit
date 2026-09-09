@@ -226,11 +226,18 @@ _INPUT_ARGUMENTS = (
 
 ANALYZE = CommandSpec(
     path=("analyze",),
-    help="Process local files with an analyzer and return analyzer results.",
+    help="Process local files, directories, or HTTPS URLs and return analyzer results.",
     operation="cu_cli_core.operations.analysis#execute_analyze",
     request_type="cu_cli_core.contracts#AnalyzeRequest",
     arguments=(
         *_INPUT_ARGUMENTS,
+        ArgumentSpec(
+            "--url",
+            field="urls",
+            parser_name="urls",
+            help="HTTPS input URL, including an Azure Blob SAS URL. Repeat for multiple URLs.",
+            repeatable=True,
+        ),
         ArgumentSpec(
             "--analyzer",
             aliases=("-a",),
@@ -583,8 +590,7 @@ ANALYZER_COPY = CommandSpec(
             "--source-profile",
             field="source_profile",
             parser_name="source_profile",
-            help="Standalone named CU CLI profile for the source.",
-            classification=SurfaceClassification.STANDALONE_SHORTCUT,
+            help="Named CU profile for the source.",
         ),
         ArgumentSpec(
             "--destination-resource",
@@ -611,8 +617,7 @@ ANALYZER_COPY = CommandSpec(
             "--destination-profile",
             field="destination_profile",
             parser_name="destination_profile",
-            help="Standalone named CU CLI profile for the destination.",
-            classification=SurfaceClassification.STANDALONE_SHORTCUT,
+            help="Named CU profile for the destination.",
         ),
     ),
     service_options=_SERVICE_OPTIONS,

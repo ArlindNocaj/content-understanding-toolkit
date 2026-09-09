@@ -35,13 +35,38 @@ def resolve_service_settings(
     return resolved_endpoint, api_version or profile.api_version
 
 
-def get_cli_credential(cli_ctx: Any) -> Any:
+def get_cli_credential(cli_ctx: Any, subscription_id: str | None = None) -> Any:
     """Return a token credential for the active Azure CLI login and subscription."""
 
     profile = AzureCliProfile(cli_ctx=cli_ctx)
-    subscription_id = profile.get_subscription_id()
-    credential, _, _ = profile.get_login_credentials(subscription_id=subscription_id)
+    selected_subscription = subscription_id or profile.get_subscription_id()
+    credential, _, _ = profile.get_login_credentials(subscription_id=selected_subscription)
     return credential
+
+
+def get_subscription_id(cli_ctx: Any) -> str:
+    """Return the subscription selected by the Azure CLI host."""
+
+    return AzureCliProfile(cli_ctx=cli_ctx).get_subscription_id()
+
+
+def get_cli_credential_for_subscription(cli_ctx: Any, subscription_id: str) -> Any:
+    """Return the host credential scoped to an explicitly selected subscription."""
+
+    credential, _, _ = AzureCliProfile(cli_ctx=cli_ctx).get_login_credentials(
+        subscription_id=subscription_id
+    )
+    return credential
+
+
+def ensure_supported_cloud(cli_ctx: Any) -> None:
+    """Reject clouds not explicitly supported by this preview."""
+
+    cloud_name = getattr(getattr(cli_ctx, "cloud", None), "name", "AzureCloud")
+    if cloud_name != "AzureCloud":
+        raise AzureConnectionError(
+            f"Azure cloud '{cloud_name}' is not supported by this preview extension."
+        )
 
 
 def create_content_understanding_client(
@@ -50,6 +75,7 @@ def create_content_understanding_client(
     endpoint: str | None,
     api_version: str | None,
     profile_name: str | None,
+    subscription_id: str | None = None,
 ) -> Any:
     """Build a CU SDK client using Azure CLI host context."""
 
@@ -58,14 +84,10 @@ def create_content_understanding_client(
         api_version=api_version,
         profile_name=profile_name,
     )
-    cloud_name = getattr(getattr(cmd.cli_ctx, "cloud", None), "name", "AzureCloud")
-    if cloud_name != "AzureCloud":
-        raise AzureConnectionError(
-            f"Azure cloud '{cloud_name}' is not supported by this preview extension."
-        )
+    ensure_supported_cloud(cmd.cli_ctx)
     return build_content_understanding_client(
         endpoint=resolved_endpoint,
-        credential=get_cli_credential(cmd.cli_ctx),
+        credential=get_cli_credential(cmd.cli_ctx, subscription_id),
         api_version=resolved_api_version,
         user_agent=f"{get_az_user_agent()} content-understanding/{__version__}",
     )

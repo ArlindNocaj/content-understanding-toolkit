@@ -9,6 +9,7 @@ from azure.cli.core.azclierror import (
     ArgumentUsageError,
     AuthenticationError as AzureCliAuthenticationError,
     AzureConnectionError,
+    FileOperationError,
     InvalidArgumentValueError,
     ResourceNotFoundError,
     ServiceError as AzureCliServiceError,
@@ -22,6 +23,8 @@ from azure.core.exceptions import (
 from knack.util import CLIError
 
 from cu_cli_core.errors import CuCoreError, ErrorCategory
+from cu_cli_core.command_spec import CommandBindingError
+from cu_cli_core.input_planning import redact_sensitive_urls
 
 TRANSLATABLE_ERRORS = (
     CuCoreError,
@@ -36,21 +39,25 @@ def azure_cli_error(error: Exception) -> CLIError:
     """Create an Azure CLI error while preserving safe CU diagnostic context."""
 
     if isinstance(error, CuCoreError):
-        message = error.message
+        message = redact_sensitive_urls(error.message)
         if error.hint:
-            message = f"{message} {error.hint}"
+            message = f"{message} {redact_sensitive_urls(error.hint)}"
 
         error_types = {
             ErrorCategory.USAGE: ArgumentUsageError,
             ErrorCategory.VALIDATION: InvalidArgumentValueError,
             ErrorCategory.AUTHENTICATION: AzureCliAuthenticationError,
             ErrorCategory.NOT_FOUND: ResourceNotFoundError,
-            ErrorCategory.LOCAL_IO: AzureConnectionError,
+            ErrorCategory.LOCAL_IO: FileOperationError,
         }
         error_type = error_types.get(error.category, CLIError)
         return error_type(message)
 
-    message = getattr(error, "message", None) or str(error)
+    message = redact_sensitive_urls(getattr(error, "message", None) or str(error))
+    if isinstance(error, CommandBindingError):
+        return ArgumentUsageError(message)
+    if isinstance(error, OSError):
+        return FileOperationError(message)
     if isinstance(error, ClientAuthenticationError):
         return AzureCliAuthenticationError(message)
     if isinstance(error, AzureResourceNotFoundError):

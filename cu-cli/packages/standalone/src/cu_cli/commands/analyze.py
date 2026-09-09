@@ -225,6 +225,8 @@ def _print_discovery(input_plan: InputPlan, *, analyzer_id: str) -> None:
 
 
 def _print_dry_run(plan: ExecutionPlan, *, analyzer_id: str) -> None:
+    from cu_cli_core.input_planning import redact_input_reference
+
     input_plan = plan.input_plan
     console.print("[bold cyan]Dry run[/bold cyan]")
     console.print(
@@ -247,11 +249,14 @@ def _print_dry_run(plan: ExecutionPlan, *, analyzer_id: str) -> None:
                 else plan.on_existing.value
             )
             console.print(
-                f"  {_esc(str(output.source.path))} -> {_esc(destination)} "
+                f"  {_esc(redact_input_reference(output.source.reference))} -> {_esc(destination)} "
                 f"[dim](exists: {action})[/dim]"
             )
         else:
-            console.print(f"  {_esc(str(output.source.path))} -> {_esc(destination)}")
+            console.print(
+                f"  {_esc(redact_input_reference(output.source.reference))} -> "
+                f"{_esc(destination)}"
+            )
     console.print(
         "[dim]No service calls or files were written. Analyzer existence, "
         "service-side format acceptance, usage, and cost were not validated.[/dim]"
@@ -292,6 +297,7 @@ def cmd_analyze(
     inputs,
     files,
     sources,
+    urls,
     pattern,
     recursive,
     analyzer_id,
@@ -314,7 +320,11 @@ def cmd_analyze(
     show_calling_time,
 ) -> None:
     from cu_cli_core.contracts import ExistingResultPolicy, InputOrigin, ResultView
-    from cu_cli_core.input_planning import plan_inputs, plan_outputs
+    from cu_cli_core.input_planning import (
+        plan_inputs,
+        plan_outputs,
+        redact_input_reference,
+    )
 
     try:
         request = build_request(
@@ -323,6 +333,7 @@ def cmd_analyze(
                 "inputs": inputs,
                 "files": files,
                 "sources": sources,
+                "urls": urls,
                 "pattern": pattern,
                 "recursive": recursive,
                 "analyzer_id": analyzer_id,
@@ -364,6 +375,7 @@ def cmd_analyze(
         positional=request.positional_inputs,
         files=request.files,
         sources=request.sources,
+        urls=request.urls,
         pattern=request.pattern,
         recursive=request.recursive,
     )
@@ -399,7 +411,8 @@ def cmd_analyze(
 
     jobs = [
         AnalyzeJob(
-            input_ref=str(output.source.path),
+            input_ref=redact_input_reference(output.source.reference),
+            input_url=output.source.url,
             analyzer_id=effective_analyzer,
             out_path=output.path,
             output_format=fmt,

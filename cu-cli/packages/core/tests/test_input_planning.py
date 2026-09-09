@@ -268,6 +268,30 @@ def test_single_input_streams_without_destination_by_default(tmp_path):
     assert execution.outputs[0].path is None
 
 
+def test_named_sas_url_is_preserved_and_redacted_for_display():
+    from cu_cli_core.contracts import InputOrigin
+    from cu_cli_core.input_planning import redact_input_reference
+
+    url = "https://storage.example.test/container/input.pdf?sv=1&sig=secret"
+
+    plan = plan_inputs(urls=[url])
+
+    assert plan.inputs[0].origin is InputOrigin.NAMED_URL
+    assert plan.inputs[0].url == url
+    assert plan.inputs[0].path is None
+    assert redact_input_reference(plan.inputs[0].reference).endswith("?REDACTED")
+    assert "secret" not in redact_input_reference(plan.inputs[0].reference)
+
+
+def test_remote_batch_requires_output_directory():
+    plan = plan_inputs(
+        urls=["https://one.example.test/a.pdf", "https://two.example.test/b.pdf"]
+    )
+
+    with pytest.raises(UsageError, match="--output-dir is required"):
+        plan_outputs(plan, view=ResultView.FULL)
+
+
 def test_multiple_inputs_write_alongside_sources(tmp_path):
     first = tmp_path / "first.pdf"
     second = tmp_path / "second.pdf"

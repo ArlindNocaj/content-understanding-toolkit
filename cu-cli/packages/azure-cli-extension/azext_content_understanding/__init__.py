@@ -17,7 +17,7 @@ class ContentUnderstandingCommandsLoader(AzCommandsLoader):
         from azure.cli.core.commands import CliCommandType
 
         custom_type = CliCommandType(
-            operations_tmpl="azext_content_understanding.custom#{}",
+            operations_tmpl="azext_content_understanding._commands#{}",
         )
         super().__init__(cli_ctx=cli_ctx, custom_command_type=custom_type)
 

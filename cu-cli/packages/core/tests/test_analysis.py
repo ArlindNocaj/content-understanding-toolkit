@@ -120,6 +120,31 @@ def test_analyze_bytes_and_one_use_the_client(tmp_path):
     assert analyze_one(client, job)["analyzer_id"] == "prebuilt-invoice"
 
 
+def test_analyze_url_job_preserves_sas_for_service(monkeypatch):
+    from cu_cli_core import analysis
+
+    url = "https://storage.example.test/c/input.pdf?sv=1&sig=secret"
+    seen = {}
+    monkeypatch.setattr(analysis, "_analysis_url_input", lambda value: value)
+
+    class Client:
+        def begin_analyze(self, *, analyzer_id, inputs):
+            seen.update(analyzer_id=analyzer_id, url=inputs[0])
+            return type("Poller", (), {"result": lambda self: {"ok": True}})()
+
+    result = analysis.analyze_one(
+        Client(),
+        analysis.AnalyzeJob(
+            input_ref="https://storage.example.test/c/input.pdf?REDACTED",
+            input_url=url,
+            analyzer_id="prebuilt-layout",
+        ),
+    )
+
+    assert result == {"ok": True}
+    assert seen == {"analyzer_id": "prebuilt-layout", "url": url}
+
+
 def test_analyze_bytes_and_one_inline_use_the_synchronous_client_method(tmp_path):
     client = _FakeClient()
     assert analyze_bytes_inline(client, "prebuilt-layout", b"abc") == {
