@@ -350,6 +350,12 @@ def _load_command_arguments(loader, command: str) -> None:
                 help="Configure RBAC role assignments in the generated project.",
             )
             context.argument(
+                "no_assign_roles",
+                options_list=["--no-assign-roles"],
+                action="store_true",
+                help="Skip generated RBAC role assignments; subsequent az cu commands require existing access.",
+            )
+            context.argument(
                 "force",
                 options_list=["--force"],
                 action="store_true",

@@ -17,6 +17,7 @@ from azure.mgmt.cognitiveservices.models import Deployment, DeploymentModel, Dep
 from knack.prompting import prompt
 
 from cu_cli_core.errors import ConflictError, ServiceError, UsageError, ValidationError
+from cu_cli_core.defaults import apply_defaults
 
 from . import __version__
 from ._client_factory import (
@@ -251,9 +252,11 @@ def setup_models(cmd: Any, **values: Any) -> dict[str, Any]:
         selected = _select(candidates, selection.split(","))
     if values.get("deploy", True):
         _deploy(management, values["resource_group"], values["account_name"], selected)
+        apply_defaults(cu_client, {item.name: item.name for item in selected}, replace=False)
     _write(output, selected)
     return {
         "models": [item.template_entry() for item in selected],
         "outputFile": str(output),
         "deployed": bool(values.get("deploy", True)),
+        "defaultsConfigured": bool(values.get("deploy", True) and selected),
     }

@@ -45,10 +45,15 @@ def test_write_project_materializes_canonical_template(tmp_path: Path) -> None:
     readme = (target / "README.md").read_text(encoding="utf-8")
     assert "az cu _infra-models" in posix_hook
     assert "'cu', '_infra-models'" in powershell_hook
+    assert "profile set --key endpoint --value" in posix_hook
+    assert "profile set --key endpoint --value" in powershell_hook
+    assert "defaults set --from-profile" not in posix_hook
+    assert "defaults set --from-profile" not in powershell_hook
     assert "cu-cli" not in posix_hook
     assert "cu-cli" not in powershell_hook
     assert "keep the `cu` CLI installed" not in readme
-    assert "az cu profile set endpoint" in readme
+    assert "az cu profile set --key endpoint --value" in readme
+    assert "`AZD_ASSIGN_ROLES`" in readme
     environment = (target / ".azure/dev/.env").read_text(encoding="utf-8")
     assert 'AZURE_SUBSCRIPTION_ID="sub-id"' in environment
     assert 'CU_MODEL_SELECTION="recommended"' in environment
@@ -101,8 +106,30 @@ def test_generate_noninteractive_uses_active_azure_cli_account(
 
     assert result["subscriptionId"] == "sub-id"
     assert result["model_selection"] == "none"
+    assert result["assign_roles"] is True
     assert result["nextSteps"][-1] == "azd up"
     assert Path(result["outputDirectory"], "azure.yaml").is_file()
+    environment = Path(result["outputDirectory"], ".azure/dev/.env").read_text(encoding="utf-8")
+    assert 'AZD_ASSIGN_ROLES="true"' in environment
+
+
+def test_generate_can_explicitly_skip_role_assignment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    account = AzureAccount("sub-id", "Development", "tenant-id")
+    monkeypatch.setattr(_infra.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(_infra, "ensure_supported_cloud", lambda _ctx: None)
+    monkeypatch.setattr(_infra, "_choose_account", lambda _ctx, interactive: account)
+
+    result = _infra.generate_infrastructure(
+        SimpleNamespace(cli_ctx=object()),
+        output_dir=str(tmp_path / "provision"),
+        location="eastus2",
+        models="none",
+        no_assign_roles=True,
+    )
+
+    assert result["assign_roles"] is False
 
 
 def test_models_special_values_cannot_be_combined() -> None:

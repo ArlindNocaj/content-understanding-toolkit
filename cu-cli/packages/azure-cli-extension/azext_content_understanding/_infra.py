@@ -130,7 +130,18 @@ def _copy_template_file(source: Path, relative: Path, destination: Path) -> None
             flags=re.DOTALL,
         )
         content = re.sub(r"(?m)^cu (?=(?:profile|doctor|analyze|analyzer))", "az cu ", content)
+        content = re.sub(
+            r"(?m)^az cu profile set (\S+) (.*)$",
+            r"az cu profile set --key \1 --value \2",
+            content,
+        )
         content = content.replace("`cu infra generate --force`", "`az cu infra generate --force`")
+        content = content.replace("`AZURE_ASSIGN_ROLES`", "`AZD_ASSIGN_ROLES`")
+        content = content.replace(
+            "the post-provision hook uses resource-key\nauthentication instead.",
+            "the post-provision helper can use a resource key for setup, but later `az cu` "
+            "commands still require existing data-plane access.",
+        )
         content = re.sub(r"\nOn macOS, use `cu-cli`.*?command\)\.\n", "\n", content, flags=re.DOTALL)
         destination.write_text(content, encoding="utf-8")
         return
@@ -227,6 +238,8 @@ def _choose_account(cli_ctx: Any, *, interactive: bool) -> AzureAccount:
 
 def _interactive_choices(values: dict[str, Any], account: AzureAccount) -> dict[str, Any]:
     resolved = dict(values)
+    if resolved.get("no_assign_roles"):
+        resolved["assign_roles"] = False
     resolved["environment"] = resolved.get("environment") or prompt(
         "azd environment name", default=DEFAULT_ENVIRONMENT
     )
@@ -257,7 +270,7 @@ def _interactive_choices(values: dict[str, Any], account: AzureAccount) -> dict[
             resolved["models"] = prompt("Comma-separated model names or name@version selectors")
     if resolved.get("assign_roles") is None and not resolved.get("foundry_endpoint"):
         resolved["assign_roles"] = prompt_y_n(
-            "Assign required RBAC roles to the signed-in user?", default="n"
+            "Assign required RBAC roles to the signed-in user?", default="y"
         )
     del account
     return resolved
@@ -388,7 +401,11 @@ def generate_infrastructure(cmd: Any, **values: Any) -> dict[str, Any]:
         foundry_endpoint=endpoint,
         foundry_resource_group=resource_group,
         model_selection=_parse_models(values.get("models")),
-        assign_roles=bool(values.get("assign_roles")),
+        assign_roles=(
+            bool(values.get("assign_roles"))
+            if values.get("assign_roles") is not None
+            else not bool(values.get("no_assign_roles"))
+        ),
         force_profile_setup=bool(values.get("force")),
     )
     target = Path(values.get("output_dir") or "provision").expanduser().resolve()
