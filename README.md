@@ -29,14 +29,14 @@ it needs instead of loading the whole document into its context, and `cu resolve
 
 | I want to… | Command | You get |
 | --- | --- | --- |
-| Read a document as markdown (RAG, agents) | `cu analyze doc.pdf` | **Default** = `-a prebuilt-documentSearch`: text and tables, document summary, figure/chart descriptions, anchors on key sections, tables and figures. |
-| …and point at any paragraph later | `cu analyze doc.pdf --level paragraph --format both --output-file doc` | Adds `<!--p3-->` on every paragraph outside tables/figures (+6.5 % tokens); writes `doc.md` (an agent can `grep` it instead of reading it all) and `doc.json` for `cu resolve`. One service call; the written paths are printed to stdout. |
-| Get page + bounding box + context for an anchor | `cu resolve doc.json p3 --around 1` | JSON with page, bbox (inches), text, and the block (paragraph, table or figure) before/after. Runs locally — no endpoint. |
-| Fastest / cheapest OCR + layout, no LLM | `cu analyze doc.pdf -a prebuilt-layout` | Markdown + tables, no summary or figure descriptions. `-a prebuilt-read` for text only. |
-| What fields are in this document? | `cu analyze doc.pdf -a prebuilt-documentFields` | LLM-proposed key-value fields, no schema needed; `-a prebuilt-documentFieldSchema` returns a schema proposal instead. |
-| Extract fields (invoice, receipt, ID, …) | `cu analyze invoice.pdf -a prebuilt-invoice --json` | Typed fields, each with a **confidence score**, its **bounding box** (`source`) and text **span**. |
-| Extract *my* fields | `cu analyzer schema create --from-sample f.pdf …` → `cu analyzer create` | Custom analyzer; see [Create a custom analyzer][cu_custom_analyzer]. |
-| Batch a folder | `cu analyze --source ./docs --format both --output-dir ./out --yes` | `NAME.result.md` + `NAME.result.json` per file, paths listed on stdout. |
+| Read a document as markdown | `cu analyze doc.pdf` | Text, tables, summary, figure descriptions, anchors on sections/tables/figures. Default `-a prebuilt-documentSearch`. |
+| …and cite any paragraph later | `cu analyze doc.pdf --level paragraph --format both --output-file doc` | `doc.md` with `<!--p3-->` per paragraph (+6.5 % tokens) and `doc.json`, one call; paths printed to stdout. |
+| Page + bbox + context of an anchor | `cu resolve doc.json p3 --around 1` | Page, bbox (inches), text, block before/after. Local, no endpoint. |
+| Cheapest OCR + layout, no LLM | `cu analyze doc.pdf -a prebuilt-layout` | Markdown + tables, no summary/figure text. `-a prebuilt-read` for text only. |
+| Which fields are in here? | `cu analyze doc.pdf -a prebuilt-documentFields` | LLM-proposed key/values. `-a prebuilt-documentFieldSchema` proposes a schema. |
+| Extract fields (invoice, receipt, ID…) | `cu analyze invoice.pdf -a prebuilt-invoice --json` | Typed fields with **confidence**, **bounding box** (`source`) and **span**. |
+| Extract *my* fields | `cu analyzer schema create --from-sample f.pdf …` → `cu analyzer create` | Custom analyzer — [Create a custom analyzer][cu_custom_analyzer]. |
+| Batch a folder | `cu analyze --source docs/ --format both --output-dir out/ --yes` | `NAME.result.md` + `.result.json` per file, paths on stdout. |
 
 `--format md` (default) or `json` selects the view, `--output-file` / `--output-dir` where it
 goes; `--format both` writes `NAME.md` and `NAME.json` from one service call and lists them on
