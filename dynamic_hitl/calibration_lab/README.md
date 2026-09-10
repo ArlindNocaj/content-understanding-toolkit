@@ -6,20 +6,20 @@ The companion explainer site is in [`../web_app/`](../web_app/); it shows *what*
 
 ## Run it
 
-Create a virtual environment at the repo root and install the dependencies from the Microsoft package registry:
+Create a virtual environment at the repo root and install the dependencies:
 
 ```powershell
 # From the repo root.
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --index-url https://packagefeedproxy.microsoft.io/pypi/simple/ -r dynamic_hitl\calibration_lab\requirements.txt
+python -m pip install -r dynamic_hitl\calibration_lab\requirements.txt
 ```
 
 ```bash
 # bash / zsh
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install --index-url https://packagefeedproxy.microsoft.io/pypi/simple/ -r dynamic_hitl/calibration_lab/requirements.txt
+python -m pip install -r dynamic_hitl/calibration_lab/requirements.txt
 ```
 
 Then launch the notebook:
