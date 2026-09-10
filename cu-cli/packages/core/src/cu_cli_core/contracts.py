@@ -20,6 +20,7 @@ class SelectionMode(str, Enum):
     POSITIONAL = "positional"
     NAMED_FILES = "named-files"
     NAMED_SOURCES = "named-sources"
+    NAMED_URLS = "named-urls"
 
 
 class InputOrigin(str, Enum):
@@ -28,6 +29,7 @@ class InputOrigin(str, Enum):
     POSITIONAL_URL = "positional-url"
     NAMED_FILE = "named-file"
     NAMED_SOURCE = "named-source"
+    NAMED_URL = "named-url"
 
 
 class ExistingResultPolicy(str, Enum):
@@ -176,6 +178,7 @@ class AnalyzeRequest:
     yes: bool = False
     report_file: Path | None = None
     concurrency: int = 4
+    urls: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -185,6 +188,7 @@ class AnalyzeRequest:
         )
         object.__setattr__(self, "files", tuple(Path(path) for path in self.files))
         object.__setattr__(self, "sources", tuple(Path(path) for path in self.sources))
+        object.__setattr__(self, "urls", tuple(str(value) for value in self.urls))
         if self.output_file is not None:
             object.__setattr__(self, "output_file", Path(self.output_file))
         if self.output_dir is not None:

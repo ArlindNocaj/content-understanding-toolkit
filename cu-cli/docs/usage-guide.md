@@ -329,20 +329,25 @@ cu analyze ./document.pdf
 
 ### Analyze an HTTPS or SAS URL
 
-Pass an HTTPS URL in the same positional input slot as a local file. CU CLI sends
+Pass an HTTPS URL with the named `--url` option. CU CLI sends
 the reference to Content Understanding and does not download or upload the file
 itself. This enables URL-based service limits, including large video workflows:
 
 ```bash
-cu analyze "https://storage.example.net/container/video.mp4" \
+cu analyze --url "https://storage.example.net/container/video.mp4" \
   --analyzer prebuilt-videoSearch
 ```
+
+Repeat `--url` for multiple URLs. It cannot be combined with positional inputs,
+`--file`, or `--source`. Positional URLs remain available as a standalone
+shortcut, including when mixing local and remote inputs. `--pattern` requires
+`--source`, and `--recursive` requires a directory input.
 
 Azure Blob SAS query parameters are preserved exactly for the service request.
 Quote the complete URL so the shell does not interpret `&` characters:
 
 ```bash
-cu analyze "https://storage.example.net/container/video.mp4?sv=<version>&sp=r&sig=<signature>" \
+cu analyze --url "https://storage.example.net/container/video.mp4?sv=<version>&sp=r&sig=<signature>" \
   --analyzer prebuilt-videoSearch \
   --json
 ```
@@ -373,8 +378,8 @@ unavailable and does not probe or download remote content:
 
 ```bash
 cu analyze \
-  "https://storage.example.net/container/one.pdf" \
-  "https://storage.example.net/container/two.pdf" \
+  --url "https://storage.example.net/container/one.pdf" \
+  --url "https://storage.example.net/container/two.pdf" \
   --analyzer prebuilt-layout \
   --output-dir ./results \
   --dry-run

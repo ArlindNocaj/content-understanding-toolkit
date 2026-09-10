@@ -233,6 +233,13 @@ _ANALYZE_INPUT_ARGUMENTS = (
         classification=SurfaceClassification.STANDALONE_SHORTCUT,
     ),
     *_INPUT_ARGUMENTS[1:],
+    ArgumentSpec(
+        "--url",
+        field="urls",
+        parser_name="urls",
+        help="HTTPS or Azure Blob SAS URL. Repeat for multiple URLs.",
+        repeatable=True,
+    ),
 )
 
 

@@ -387,6 +387,7 @@ def _print_dry_run(plan: ExecutionPlan, *, analyzer_id: str) -> None:
                       "[bold cyan]--json[/bold cyan]\n\n"
                       "[white]\u00a0\u00a0Extract invoice fields as JSON.[/white]\n\n"
                       "[bold green]cu analyze[/bold green] "
+                      "[bold cyan]--url[/bold cyan] "
                       "[bold yellow]HTTPS_URL[/bold yellow] "
                       "[bold cyan]-a[/bold cyan] "
                       "[bold magenta]prebuilt-layout[/bold magenta]\n\n"
@@ -412,6 +413,7 @@ def cmd_analyze(
     inputs,
     files,
     sources,
+    urls,
     pattern,
     recursive,
     analyzer_id,
@@ -443,6 +445,7 @@ def cmd_analyze(
                 "inputs": inputs,
                 "files": files,
                 "sources": sources,
+                "urls": urls,
                 "pattern": pattern,
                 "recursive": recursive,
                 "analyzer_id": analyzer_id,
@@ -484,6 +487,7 @@ def cmd_analyze(
         positional=request.positional_inputs,
         files=request.files,
         sources=request.sources,
+        urls=request.urls,
         pattern=request.pattern,
         recursive=request.recursive,
     )

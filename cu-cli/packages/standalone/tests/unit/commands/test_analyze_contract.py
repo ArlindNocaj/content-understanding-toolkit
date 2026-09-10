@@ -49,6 +49,7 @@ def test_help_exposes_preview_contract_and_removes_replaced_options():
     for option in (
         "--file",
         "--source",
+        "--url",
         "--pattern",
         "--recursive",
         "--llm-input",
@@ -72,6 +73,11 @@ def test_help_exposes_preview_contract_and_removes_replaced_options():
         ("input.pdf", "--source", "documents"),
         ("--file", "input.pdf", "--source", "documents"),
         ("--file", "input.pdf", "--pattern", "*.pdf"),
+        ("input.pdf", "--url", "https://example.test/input.pdf"),
+        ("--file", "input.pdf", "--url", "https://example.test/input.pdf"),
+        ("--source", "documents", "--url", "https://example.test/input.pdf"),
+        ("--url", "https://example.test/input.pdf", "--pattern", "*.pdf"),
+        ("--url", "https://example.test/input.pdf", "--recursive"),
     ],
 )
 def test_invalid_selection_modes_fail_before_config_or_client(monkeypatch, args):
@@ -103,9 +109,11 @@ def test_positional_wildcard_is_not_interpreted_by_cu(monkeypatch):
     assert "--pattern" in result.output
 
 
+@pytest.mark.parametrize("input_option", [(), ("--url",)], ids=["positional", "named"])
 def test_https_sas_url_reaches_url_runner_without_secret_in_display(
     analyze_runtime,
     monkeypatch,
+    input_option,
 ):
     url = (
         "https://storage.example.test/container/video.mp4"
@@ -119,7 +127,7 @@ def test_https_sas_url_reaches_url_runner_without_secret_in_display(
 
     monkeypatch.setattr("cu_cli.commands.analyze._run_one", run_one)
 
-    result = _run("analyze", url, "--json")
+    result = _run("analyze", *input_option, url, "--json")
 
     assert result.exit_code == 0, result.output
     assert captured[0].input_url == url
@@ -415,11 +423,12 @@ def test_remote_json_redaction_preserves_nested_spans(
     assert original.as_dict() == snapshot
 
 
+@pytest.mark.parametrize("input_option", [(), ("--url",)], ids=["positional", "named"])
 @pytest.mark.parametrize("inline", [False, True], ids=["lro", "inline"])
 @pytest.mark.parametrize("write_file", [False, True], ids=["stdout", "file"])
 @pytest.mark.parametrize("show_usage", [False, True], ids=["without-usage", "with-usage"])
 def test_remote_json_preserves_sdk_response_envelope(
-    monkeypatch, tmp_path, inline, write_file, show_usage,
+    monkeypatch, tmp_path, inline, write_file, show_usage, input_option,
 ):
     from azure.ai.contentunderstanding.models import AnalysisResult
     from cu_cli.output import render_markdown
@@ -482,7 +491,7 @@ def test_remote_json_preserves_sdk_response_envelope(
         ),
     )
     monkeypatch.setattr("cu_cli.commands.analyze.build_client", lambda *_args, **_kwargs: client)
-    args = ["analyze", url, "--json"]
+    args = ["analyze", *input_option, url, "--json"]
     if inline:
         args.append("--inline")
     if show_usage:
@@ -674,11 +683,15 @@ def test_unsupported_remote_scheme_fails_before_config_or_client(monkeypatch, ur
     assert "HTTPS" in result.output
 
 
-def test_sas_url_dry_run_redacts_secret_and_reports_unavailable_size(analyze_runtime):
+@pytest.mark.parametrize("input_option", [(), ("--url",)], ids=["positional", "named"])
+def test_sas_url_dry_run_redacts_secret_and_reports_unavailable_size(
+    analyze_runtime, input_option,
+):
     url = "https://storage.example.test/container/input.pdf?sv=1&sp=r&sig=secret"
 
     result = _run(
         "analyze",
+        *input_option,
         url,
         "--json",
         "--output-dir",
@@ -737,15 +750,17 @@ def test_remote_service_error_redacts_sas_in_output_and_report(
     assert report["results"][0]["input"].endswith("input.pdf?REDACTED")
 
 
-def test_remote_batch_writes_safe_distinct_results(analyze_runtime):
+@pytest.mark.parametrize("input_option", [(), ("--url",)], ids=["positional", "named"])
+def test_remote_batch_writes_safe_distinct_results(analyze_runtime, input_option):
     urls = (
         "https://one.example.test/c/input.pdf?sig=first-secret",
         "https://two.example.test/c/input.pdf?sig=second-secret",
     )
+    input_args = [argument for url in urls for argument in (*input_option, url)]
 
     result = _run(
         "analyze",
-        *urls,
+        *input_args,
         "--json",
         "--output-dir",
         "results",

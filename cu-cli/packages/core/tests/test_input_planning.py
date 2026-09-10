@@ -34,13 +34,21 @@ def test_positional_files_preserve_order_and_measure_content(tmp_path):
     assert plan.extension_counts == {".pdf": 1, ".xyz": 1}
 
 
-def test_positional_https_url_is_preserved_without_local_file_access():
+@pytest.mark.parametrize(
+    ("selection", "mode", "origin"),
+    [
+        ("positional", SelectionMode.POSITIONAL, InputOrigin.POSITIONAL_URL),
+        ("urls", SelectionMode.NAMED_URLS, InputOrigin.NAMED_URL),
+    ],
+)
+def test_https_url_is_preserved_without_local_file_access(selection, mode, origin):
     url = "https://storage.example.test/container/sample.pdf"
 
-    plan = plan_inputs(positional=[url])
+    plan = plan_inputs(**{selection: [url]})
 
+    assert plan.mode is mode
     assert len(plan.inputs) == 1
-    assert plan.inputs[0].origin is InputOrigin.POSITIONAL_URL
+    assert plan.inputs[0].origin is origin
     assert plan.inputs[0].path is None
     assert plan.inputs[0].url == url
     assert plan.inputs[0].reference == url
@@ -49,16 +57,48 @@ def test_positional_https_url_is_preserved_without_local_file_access():
     assert plan.extension_counts == {".pdf": 1}
 
 
-def test_positional_sas_url_preserves_query_parameters():
+@pytest.mark.parametrize("selection", ["positional", "urls"])
+def test_sas_url_preserves_query_parameters(selection):
     url = (
         "https://storage.example.test/container/video.mp4"
         "?sv=2026-01-01&sp=r&sig=a%2Bb%2Fc%3D"
     )
 
-    plan = plan_inputs(positional=[url])
+    plan = plan_inputs(**{selection: [url]})
 
     assert plan.inputs[0].url == url
     assert plan.inputs[0].relative_path == Path("video.mp4")
+
+
+def test_named_urls_preserve_selection_order():
+    urls = [
+        "https://example.test/video.mp4?sig=first%2Btoken",
+        "https://example.test/document.pdf?sig=second%3Dtoken",
+    ]
+
+    plan = plan_inputs(urls=urls)
+
+    assert [item.url for item in plan.inputs] == urls
+    assert all(item.origin is InputOrigin.NAMED_URL for item in plan.inputs)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "./document.pdf", "example.test/document.pdf", "C:\\documents\\document.pdf"],
+    ids=["empty", "local", "relative-url", "windows-path"],
+)
+def test_named_url_requires_an_absolute_https_url(value):
+    with pytest.raises(ValidationError, match="--url must identify an absolute HTTPS URL"):
+        plan_inputs(urls=[value])
+
+
+def test_duplicate_named_urls_are_rejected_without_echoing_query():
+    url = "https://example.test/document.pdf?sig=duplicate-secret"
+
+    with pytest.raises(UsageError, match="--url was provided more than once") as error:
+        plan_inputs(urls=[url, url])
+
+    assert "duplicate-secret" not in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -77,11 +117,12 @@ def test_redact_input_reference_hides_secrets_from_malformed_urls(url):
     assert "password" not in redacted
 
 
-def test_invalid_url_port_is_rejected_without_echoing_query():
+@pytest.mark.parametrize("selection", ["positional", "urls"])
+def test_invalid_url_port_is_rejected_without_echoing_query(selection):
     url = "https://example.test:not-a-port/input.pdf?sig=secret"
 
     with pytest.raises(ValidationError, match="not a valid URL") as error:
-        plan_inputs(positional=[url])
+        plan_inputs(**{selection: [url]})
 
     assert "secret" not in str(error.value)
 
@@ -104,6 +145,7 @@ def test_windows_drive_spelling_is_not_treated_as_url():
     assert "unsupported URL scheme" not in str(error.value)
 
 
+@pytest.mark.parametrize("selection", ["positional", "urls"])
 @pytest.mark.parametrize(
     ("url", "message"),
     [
@@ -112,25 +154,27 @@ def test_windows_drive_spelling_is_not_treated_as_url():
         ("https:/sample.pdf", "not a valid HTTPS URL"),
     ],
 )
-def test_positional_unsupported_url_has_actionable_error(url, message):
+def test_unsupported_url_has_actionable_error(url, message, selection):
     with pytest.raises(ValidationError, match=message) as error:
-        plan_inputs(positional=[url])
+        plan_inputs(**{selection: [url]})
 
     assert "HTTPS" in (error.value.hint or "") or "host" in (error.value.hint or "")
 
 
-def test_named_file_rejects_https_url_with_positional_hint():
-    with pytest.raises(UsageError, match="local files only") as error:
-        plan_inputs(files=["https://example.test/sample.pdf"])
+@pytest.mark.parametrize("selection", ["files", "sources"])
+def test_named_local_input_rejects_https_url_with_named_hint(selection):
+    with pytest.raises(UsageError, match="local .* only") as error:
+        plan_inputs(**{selection: ["https://example.test/sample.pdf"]})
 
-    assert "positional" in (error.value.hint or "")
+    assert "--url" in (error.value.hint or "")
 
 
-def test_url_over_service_length_limit_is_rejected():
+@pytest.mark.parametrize("selection", ["positional", "urls"])
+def test_url_over_service_length_limit_is_rejected(selection):
     url = "https://example.test/" + ("a" * 8192)
 
     with pytest.raises(ValidationError, match="8192-character service limit"):
-        plan_inputs(positional=[url])
+        plan_inputs(**{selection: [url]})
 
 
 def test_named_files_require_literal_files(tmp_path):
@@ -198,6 +242,26 @@ def test_pattern_filters_every_named_source(tmp_path):
         ),
         ({"files": ["a"], "sources": ["b"]}, "--file and --source"),
         ({"files": ["a"], "pattern": "*.pdf"}, "--pattern is valid only"),
+        (
+            {"positional": ["a"], "urls": ["https://example.test/b.pdf"]},
+            "positional inputs cannot be combined with --url",
+        ),
+        (
+            {"files": ["a"], "urls": ["https://example.test/b.pdf"]},
+            "--url cannot be combined with --file or --source",
+        ),
+        (
+            {"sources": ["a"], "urls": ["https://example.test/b.pdf"]},
+            "--url cannot be combined with --file or --source",
+        ),
+        (
+            {"urls": ["https://example.test/a.pdf"], "pattern": "*.pdf"},
+            "--pattern is valid only",
+        ),
+        (
+            {"urls": ["https://example.test/a.pdf"], "recursive": True},
+            "--recursive is valid only",
+        ),
         ({}, "provide positional inputs"),
     ],
 )

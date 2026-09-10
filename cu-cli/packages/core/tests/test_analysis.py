@@ -39,6 +39,8 @@ from cu_cli_core.analysis import (
     disambiguate_collisions,
     plan_jobs,
 )
+from cu_cli_core.contracts import AnalyzeRequest
+from cu_cli_core.operations.analysis import execute_analyze
 
 pytestmark = pytest.mark.unit
 
@@ -187,6 +189,21 @@ def test_analyze_url_and_job_preserve_sas_query_for_the_service():
     assert result["url"] == url
     assert job_result["url"] == url
     assert client.url_calls == [("prebuilt-video", url), ("prebuilt-video", url)]
+    assert client.calls == []
+
+
+def test_execute_analyze_plans_named_urls_without_a_frontend():
+    client = _FakeClient()
+    url = "https://example.test/input.pdf?sv=1&sp=r&sig=a%2Bb%3D"
+    request = AnalyzeRequest(urls=(url,), analyzer="prebuilt-layout")
+
+    result = execute_analyze(client, request)
+
+    assert result.failures == []
+    assert len(result.successes) == 1
+    assert result.successes[0].job.input_url == url
+    assert result.successes[0].job.input_ref == "https://example.test/input.pdf?REDACTED"
+    assert client.url_calls == [("prebuilt-layout", url)]
     assert client.calls == []
 
 

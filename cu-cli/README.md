@@ -143,13 +143,17 @@ model or embeddings model. `-a` is the short form of `--analyzer`:
 cu analyze ./document.pdf -a prebuilt-layout
 ```
 
-Analyze a remote file without downloading it through the CLI. Quote URLs that
-contain SAS query parameters so the shell preserves `&` characters:
+Analyze a remote file with `--url` without downloading it through the CLI.
+Quote URLs that contain SAS query parameters so the shell preserves `&` characters:
 
 ```bash
-cu analyze "https://storage.example.net/container/video.mp4?sv=<version>&sp=r&sig=<signature>" \
+cu analyze --url "https://storage.example.net/container/video.mp4?sv=<version>&sp=r&sig=<signature>" \
   --analyzer prebuilt-videoSearch
 ```
+
+Repeat `--url` for multiple URLs and specify `--output-dir` for their results.
+`--url` cannot be combined with positional inputs, `--file`, or `--source`.
+Positional URLs remain available as a standalone shortcut.
 
 Remote inputs require HTTPS. Use a short-lived, read-only SAS and avoid placing
 production SAS URLs in shared shell history. CU CLI removes URL query strings

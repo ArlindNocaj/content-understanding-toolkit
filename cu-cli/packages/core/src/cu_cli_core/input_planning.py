@@ -204,25 +204,30 @@ def plan_inputs(
     positional: Sequence[str | Path] = (),
     files: Sequence[str | Path] = (),
     sources: Sequence[str | Path] = (),
+    urls: Sequence[str] = (),
     pattern: str | None = None,
     recursive: bool = False,
 ) -> InputPlan:
     """Validate and expand one invocation's local or remote input selection."""
-    if positional and (files or sources):
+    if positional and (files or sources or urls):
         conflicts = []
         if files:
             conflicts.append("--file")
         if sources:
             conflicts.append("--source")
+        if urls:
+            conflicts.append("--url")
         raise UsageError(
             "positional inputs cannot be combined with " + " or ".join(conflicts) + "."
         )
     if files and sources:
         raise UsageError("--file and --source cannot be combined.")
+    if urls and (files or sources):
+        raise UsageError("--url cannot be combined with --file or --source.")
     if pattern is not None and not sources:
         raise UsageError("--pattern is valid only with --source.")
-    if not positional and not files and not sources:
-        raise UsageError("provide positional inputs, --file, or --source.")
+    if not positional and not files and not sources and not urls:
+        raise UsageError("provide positional inputs, --file, --source, or --url.")
 
     if positional:
         mode = SelectionMode.POSITIONAL
@@ -232,6 +237,10 @@ def plan_inputs(
         mode = SelectionMode.NAMED_FILES
         direct = files
         option = "--file"
+    elif urls:
+        mode = SelectionMode.NAMED_URLS
+        direct = urls
+        option = "--url"
     else:
         mode = SelectionMode.NAMED_SOURCES
         direct = sources
@@ -265,7 +274,7 @@ def plan_inputs(
             )
         )
 
-    def add_url(url: str) -> None:
+    def add_url(url: str, *, origin: InputOrigin) -> None:
         identity = ("url", url)
         if identity in seen:
             return
@@ -275,7 +284,7 @@ def plan_inputs(
                 path=None,
                 source_root=None,
                 relative_path=_remote_relative_path(url),
-                origin=InputOrigin.POSITIONAL_URL,
+                origin=origin,
                 size_bytes=None,
                 url=url,
             )
@@ -286,7 +295,7 @@ def plan_inputs(
             text = os.fspath(value)
             url = _validated_https_url(text, option=option)
             if url is not None:
-                add_url(url)
+                add_url(url, origin=InputOrigin.POSITIONAL_URL)
                 continue
             if any(char in text for char in _WILDCARD_CHARS):
                 raise UsageError(
@@ -319,12 +328,21 @@ def plan_inputs(
                     relative_path=Path(resolved.name),
                     origin=InputOrigin.POSITIONAL_FILE,
                 )
+    elif urls:
+        for value in urls:
+            url = _validated_https_url(value, option=option)
+            if url is None:
+                raise ValidationError(
+                    "--url must identify an absolute HTTPS URL.",
+                    hint="use --file for local files or --source for local directories.",
+                )
+            add_url(url, origin=InputOrigin.NAMED_URL)
     elif files:
         for value in files:
             if _validated_https_url(os.fspath(value), option=option) is not None:
                 raise UsageError(
                     "--file accepts local files only.",
-                    hint="pass an HTTPS URL as a positional input instead.",
+                    hint="pass an HTTPS URL with --url instead.",
                 )
             path, _ = _validated_file(Path(value), option=option)
             add_file(
@@ -341,7 +359,7 @@ def plan_inputs(
             if _validated_https_url(os.fspath(value), option=option) is not None:
                 raise UsageError(
                     "--source accepts local directories only.",
-                    hint="pass an HTTPS URL as a positional input instead.",
+                    hint="pass an HTTPS URL with --url instead.",
                 )
             source = _validated_source(Path(value), option=option)
             for child in _directory_files(
