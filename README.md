@@ -17,17 +17,21 @@ More tools will be added over time.
 pip install cu-cli
 export CU_ENDPOINT=https://<resource>.services.ai.azure.com/   # az login is enough (or CU_API_KEY=…)
 cu analyze doc.pdf                                             # markdown → stdout
+cu analyze doc.pdf --md-rich doc.md --json doc.json            # agent-friendly: write files, read selectively
 ```
 
 `cu analyze` picks the analyzer by file type (`prebuilt-documentSearch` for documents) and
 prints LLM-ready markdown: text, tables, a document summary, a description of every figure,
 and small anchors — `<!--s1-->` section, `<!--t0-->` table, `<!--f0-->` figure — that
 `cu resolve` turns back into page + bounding box, so an agent can cite where an answer came from.
+For an agent, write the outputs to files: it can then `grep`/`head` the markdown for the parts
+it needs instead of loading the whole document into its context, and `cu resolve` the anchors it cites.
 
 | I want to… | Command | You get |
 | --- | --- | --- |
 | Read a document as markdown (RAG, agents) | `cu analyze doc.pdf` | **Default** = `-a prebuilt-documentSearch --md-rich=coarse`: text and tables, document summary, figure/chart descriptions, anchors on key sections, tables and figures. |
-| …and point at any paragraph later | `cu analyze doc.pdf --md-rich=paragraph --json doc.json` | Adds `<!--p3-->` on every paragraph outside tables/figures (+6.5 % tokens) and saves the full result for lookups. Still one service call. |
+| Let an agent read it selectively | `cu analyze doc.pdf --md-rich doc.md --json doc.json` | Same markdown as a file (search it, read parts of it) plus the full result for `cu resolve`. One service call. |
+| …and point at any paragraph later | `cu analyze doc.pdf --md-rich=paragraph --json doc.json` | Adds `<!--p3-->` on every paragraph outside tables/figures (+6.5 % tokens). With a file: `--level paragraph --md-rich doc.md`. |
 | Get page + bounding box + context for an anchor | `cu resolve doc.json p3 --around 1` | JSON with page, bbox (inches), text, and the block (paragraph, table or figure) before/after. Runs locally — no endpoint. |
 | See everything on the page of an anchor | `cu resolve doc.json p3 --page` | Page size, page markdown and every anchored element on that page with bboxes (`--pages 1` adds the neighbouring pages). |
 | Plain markdown only | `cu analyze doc.pdf --md` | Same text, no anchors. |
