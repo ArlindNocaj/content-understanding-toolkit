@@ -2,6 +2,13 @@
 
 The **Azure Content Understanding Toolkit** is a set of tools that ease integration with [Azure Content Understanding][cu_overview], together with experimental tools that capture best practices for building on Content Understanding.
 
+*Content Understanding is the Azure service that converts documents, images, audio and video
+into structured output. Prebuilt analyzers (invoices, contracts, tax forms, call recordings, …)
+or a custom field schema define what comes out: LLM-ready markdown, or JSON fields with
+confidence scores grounded to the source (page + bounding box). For documents it also returns
+the layout and hierarchy — sections, paragraphs, tables, figures with their positions — and
+generative descriptions of figures and charts, so the whole content of a page is usable as text.*
+
 ## Tools in this repository
 
 | Tool | Location | Description |
