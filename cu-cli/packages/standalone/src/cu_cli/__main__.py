@@ -1,0 +1,11 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
+
+"""Enable `python -m cu_cli`."""
+
+from __future__ import annotations
+
+from .cli import main
+
+if __name__ == "__main__":
+    main()
