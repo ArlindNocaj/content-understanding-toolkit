@@ -6,18 +6,18 @@ The companion explainer site is in [`../web_app/`](../web_app/); it shows *what*
 
 ## Run it
 
-Create a virtual environment at the repo root and install the dependencies:
+Requires Python 3.14. Create a virtual environment at the repo root and install the dependencies:
 
 ```powershell
 # From the repo root.
-python -m venv .venv
+py -3.14 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r dynamic_hitl\calibration_lab\requirements.txt
 ```
 
 ```bash
 # bash / zsh
-python -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r dynamic_hitl/calibration_lab/requirements.txt
 ```
