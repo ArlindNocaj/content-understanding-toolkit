@@ -568,8 +568,19 @@ def test_remote_rendering_spans_remain_contiguous_inside_replaced_urls(query):
         ) == markdown.replace(url, safe_url)
 
 
-def test_remote_same_basename_is_not_skipped_across_invocations(analyze_runtime, monkeypatch):
-    urls = ["https://example.test/download?id=one", "https://example.test/download?id=two"]
+@pytest.mark.parametrize("policy", ["error", "skip", "reanalyze"])
+@pytest.mark.parametrize(
+    "next_url",
+    [
+        "https://one.example.test/input.pdf?sig=renewed-secret",
+        "https://two.example.test/input.pdf?sig=different-secret",
+    ],
+    ids=["renewed-sas", "different-source"],
+)
+def test_remote_same_basename_follows_existing_policy_across_invocations(
+    analyze_runtime, monkeypatch, policy, next_url,
+):
+    urls = ["https://one.example.test/input.pdf?sig=original-secret", next_url]
     calls = []
 
     def run_one(_client, job):
@@ -577,28 +588,68 @@ def test_remote_same_basename_is_not_skipped_across_invocations(analyze_runtime,
         return job, {"document": urls.index(job.input_url)}
 
     monkeypatch.setattr("cu_cli.commands.analyze._run_one", run_one)
-    for url in urls + list(reversed(urls)):
-        result = _run(
-            "analyze", url, "--json", "--output-dir", "results", "--on-existing", "skip",
+    first = _run("analyze", "--url", urls[0], "--json", "--output-dir", "results")
+    assert first.exit_code == 0, first.output
+    if policy != "reanalyze":
+        monkeypatch.setattr(
+            "cu_cli.commands.analyze.build_client",
+            lambda *_args, **_kwargs: pytest.fail("client must not build"),
         )
-        assert result.exit_code == 0, result.output
 
-    assert calls == urls
+    repeated = _run(
+        "analyze", "--url", next_url, "--json", "--output-dir", "results",
+        "--on-existing", policy,
+    )
+
+    assert repeated.exit_code == (2 if policy == "error" else 0), repeated.output
+    assert calls == (urls if policy == "reanalyze" else urls[:1])
     outputs = list(Path("results").glob("*.result.json"))
-    assert len(outputs) == 2
-    assert {json.loads(path.read_text())["document"] for path in outputs} == {0, 1}
+    assert outputs == [Path("results/input.pdf.result.json")]
+    assert json.loads(outputs[0].read_text())["document"] == (1 if policy == "reanalyze" else 0)
+    assert "secret" not in first.output + repeated.output
+
+
+def test_remote_legacy_hash_result_is_not_reused(analyze_runtime, monkeypatch, tmp_path):
+    url = "https://example.test/input.pdf?sig=secret"
+    output_dir = tmp_path / "results"
+    output_dir.mkdir()
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    legacy = output_dir / f"input.pdf.{digest}.result.json"
+    legacy.write_text('{"legacy": true}')
+    calls = []
+
+    def run_one(_client, job):
+        calls.append(job.input_url)
+        return job, {"legacy": False}
+
+    monkeypatch.setattr("cu_cli.commands.analyze._run_one", run_one)
+
+    result = _run(
+        "analyze", "--url", url, "--json", "--output-dir", str(output_dir),
+        "--on-existing", "skip",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [url]
+    assert json.loads(legacy.read_text()) == {"legacy": True}
+    assert json.loads((output_dir / "input.pdf.result.json").read_text()) == {"legacy": False}
 
 
 @pytest.mark.parametrize("json_output", [False, True])
-@pytest.mark.parametrize(
-    "basename", ["a" * 230 + ".pdf", "\u4e2d" * 100 + ".pdf"], ids=["ascii", "unicode"],
-)
-def test_remote_long_filename_is_written_and_reused(
-    analyze_runtime, monkeypatch, tmp_path, json_output, basename,
+@pytest.mark.parametrize("character", ["a", "\u4e2d"], ids=["ascii", "unicode"])
+@pytest.mark.parametrize("explicit_output", [False, True], ids=["byte-limit", "explicit-short"])
+def test_remote_result_filename_is_written_and_reused(
+    analyze_runtime, monkeypatch, tmp_path, json_output, character, explicit_output,
 ):
     from azure.ai.contentunderstanding.models import AnalysisResult, DocumentContent
     from cu_cli.output import render_markdown
 
+    suffix = ".result.json" if json_output else ".result.md"
+    stem_budget = 240 - len(suffix) - len(".pdf")
+    character_count, remainder = divmod(stem_budget, len(character.encode("utf-8")))
+    basename = character * character_count + "a" * remainder + ".pdf"
+    if explicit_output:
+        basename = character + basename
     url = f"https://example.test/{basename}?sig=secret"
     original = AnalysisResult(contents=[DocumentContent(
         mime_type="application/pdf", markdown="Example",
@@ -611,7 +662,12 @@ def test_remote_long_filename_is_written_and_reused(
 
     monkeypatch.setattr("cu_cli.commands.analyze._run_one", run_one)
     output_dir = tmp_path / "results"
-    args = ["analyze", url, "--output-dir", str(output_dir)]
+    expected_name = f"custom{suffix}" if explicit_output else f"{basename}{suffix}"
+    args = ["analyze", "--url", url]
+    if explicit_output:
+        args.extend(["--output-file", str(output_dir / expected_name)])
+    else:
+        args.extend(["--output-dir", str(output_dir)])
     if json_output:
         args.append("--json")
 
@@ -621,8 +677,9 @@ def test_remote_long_filename_is_written_and_reused(
     assert repeated.exit_code == 0, repeated.output
     assert calls == [url]
     outputs = list(output_dir.iterdir())
-    assert len(outputs) == 1
-    assert len(outputs[0].name.encode("utf-8")) <= 240
+    assert outputs == [output_dir / expected_name]
+    if not explicit_output:
+        assert len(outputs[0].name.encode("utf-8")) == 240
     text = outputs[0].read_text(encoding="utf-8")
     if json_output:
         assert json.loads(text) == original.as_dict()
@@ -630,39 +687,115 @@ def test_remote_long_filename_is_written_and_reused(
         assert text == render_markdown(original)
 
 
-def test_remote_mixed_collision_reuses_result_without_overwriting_local_outputs(
-    analyze_runtime, monkeypatch, tmp_path,
+@pytest.mark.parametrize("json_output", [False, True])
+@pytest.mark.parametrize("dry_run", [False, True], ids=["execute", "dry-run"])
+@pytest.mark.parametrize(
+    "basename", ["a" * 230 + ".pdf", "\u4e2d" * 100 + ".pdf"], ids=["ascii", "unicode"],
+)
+def test_remote_overlong_filename_fails_before_client_or_writes(
+    monkeypatch, tmp_path, json_output, dry_run, basename,
 ):
-    url = "https://example.test/input.pdf?id=one"
-    calls = []
-
-    def run_one(_client, job):
-        calls.append(job.input_url)
-        return job, {"source": job.input_ref}
-
-    monkeypatch.setattr("cu_cli.commands.analyze._run_one", run_one)
+    monkeypatch.setattr(
+        "cu_cli.commands.analyze.Profile.load",
+        lambda **_kwargs: pytest.fail("config must not load"),
+    )
+    monkeypatch.setattr(
+        "cu_cli.commands.analyze.build_client",
+        lambda *_args, **_kwargs: pytest.fail("client must not build"),
+    )
     output_dir = tmp_path / "results"
-    output_args = ["--json", "--output-dir", str(output_dir), "--on-existing", "skip"]
-    first = _run("analyze", url, *output_args)
-    assert first.exit_code == 0, first.output
-    remote_path = next(output_dir.iterdir())
-    local = tmp_path / remote_path.name.removesuffix(".result.json")
-    local.write_text("local input")
-    digest = hashlib.sha1(str(local.resolve()).encode("utf-8")).hexdigest()[:8]
-    neighbor = local.with_name(f"{local.name}.{digest}")
-    neighbor.write_text("neighbor input")
+    report = tmp_path / "report.json"
+    args = [
+        "analyze", "--url", f"https://example.test/{basename}?sig=secret",
+        "--output-dir", str(output_dir), "--report-file", str(report),
+    ]
+    if json_output:
+        args.append("--json")
+    if dry_run:
+        args.append("--dry-run")
 
-    mixed = _run("analyze", url, str(local), str(neighbor), *output_args)
-    assert mixed.exit_code == 0, mixed.output
-    repeated = _run("analyze", str(neighbor), str(local), url, *output_args)
-    assert repeated.exit_code == 0, repeated.output
-    assert calls.count(url) == 1
-    assert len(calls) == 3
-    outputs = list(output_dir.iterdir())
-    assert len(outputs) == 3
-    assert {json.loads(path.read_text())["source"] for path in outputs} == {
-        "https://example.test/input.pdf?REDACTED", str(local.resolve()), str(neighbor.resolve()),
-    }
+    result = _run(*args)
+
+    assert result.exit_code == 2, result.output
+    assert "240-byte UTF-8 limit" in result.output
+    assert "--output-file" in result.output
+    assert "secret" not in result.output
+    assert not output_dir.exists()
+    assert not report.exists()
+
+
+@pytest.mark.parametrize("input_mode", ["named", "positional", "mixed"])
+@pytest.mark.parametrize("json_output", [False, True])
+@pytest.mark.parametrize("dry_run", [False, True], ids=["execute", "dry-run"])
+@pytest.mark.parametrize("policy", ["error", "skip", "reanalyze"])
+def test_remote_output_collision_fails_before_client_or_writes(
+    monkeypatch, tmp_path, input_mode, json_output, dry_run, policy,
+):
+    monkeypatch.setattr(
+        "cu_cli.commands.analyze.Profile.load",
+        lambda **_kwargs: pytest.fail("config must not load"),
+    )
+    monkeypatch.setattr(
+        "cu_cli.commands.analyze.build_client",
+        lambda *_args, **_kwargs: pytest.fail("client must not build"),
+    )
+    url = "https://one.example.test/input.pdf?sig=first-secret"
+    other_url = "https://two.example.test/input.pdf?sig=second-secret"
+    local = tmp_path / "input.pdf"
+    if input_mode == "named":
+        input_args = ["--url", url, "--url", other_url]
+    elif input_mode == "mixed":
+        local.write_text("local input")
+        input_args = [str(local), url]
+    else:
+        input_args = [url, other_url]
+    output_dir = tmp_path / "results"
+    report = tmp_path / "report.json"
+    args = [
+        "analyze", *input_args, "--output-dir", str(output_dir),
+        "--report-file", str(report), "--on-existing", policy,
+    ]
+    if json_output:
+        args.append("--json")
+    if dry_run:
+        args.append("--dry-run")
+
+    result = _run(*args)
+
+    assert result.exit_code == 2, result.output
+    assert "same result output path" in result.output
+    assert "one.example.test" in result.output
+    assert "--output-file" in result.output
+    assert "secret" not in result.output
+    assert not output_dir.exists()
+    assert not report.exists()
+    if input_mode == "mixed":
+        assert local.read_text() == "local input"
+
+
+@pytest.mark.parametrize("policy", ["error", "skip", "reanalyze"])
+def test_remote_mixed_collision_does_not_modify_existing_results(monkeypatch, tmp_path, policy):
+    monkeypatch.setattr(
+        "cu_cli.commands.analyze.build_client",
+        lambda *_args, **_kwargs: pytest.fail("client must not build"),
+    )
+    local = tmp_path / "input.pdf"
+    local.write_text("local input")
+    output_dir = tmp_path / "results"
+    output_dir.mkdir()
+    existing = output_dir / "input.pdf.result.json"
+    existing.write_text("existing result")
+
+    result = _run(
+        "analyze", "https://example.test/input.pdf?sig=secret", str(local),
+        "--json", "--output-dir", str(output_dir), "--on-existing", policy,
+    )
+
+    assert result.exit_code == 2, result.output
+    assert "same result output path" in result.output
+    assert existing.read_text() == "existing result"
+    assert list(output_dir.iterdir()) == [existing]
+    assert local.read_text() == "local input"
 
 
 @pytest.mark.parametrize("url", ["http://example.test/a.pdf", "ftp://example.test/a.pdf"])
@@ -703,6 +836,7 @@ def test_sas_url_dry_run_redacts_secret_and_reports_unavailable_size(
     assert "input.pdf?REDACTED" in result.output
     assert "secret" not in result.output
     assert "1 remote size(s) unavailable" in result.output
+    assert "input.pdf.result.json" in result.output
     assert not Path("results").exists()
 
 
@@ -754,7 +888,7 @@ def test_remote_service_error_redacts_sas_in_output_and_report(
 def test_remote_batch_writes_safe_distinct_results(analyze_runtime, input_option):
     urls = (
         "https://one.example.test/c/input.pdf?sig=first-secret",
-        "https://two.example.test/c/input.pdf?sig=second-secret",
+        "https://two.example.test/c/input.png?sig=second-secret",
     )
     input_args = [argument for url in urls for argument in (*input_option, url)]
 
@@ -768,8 +902,8 @@ def test_remote_batch_writes_safe_distinct_results(analyze_runtime, input_option
     )
 
     assert result.exit_code == 0, result.output
-    outputs = list(Path("results").glob("input.pdf.*.result.json"))
-    assert len(outputs) == 2
+    outputs = list(Path("results").glob("*.result.json"))
+    assert {path.name for path in outputs} == {"input.pdf.result.json", "input.png.result.json"}
     assert "secret" not in result.output
     assert all("secret" not in path.name for path in outputs)
 

@@ -453,11 +453,16 @@ def plan_outputs(
                 raise ValidationError(
                     f"source-relative output path is invalid: {relative}"
                 )
-            if item.is_remote:
-                digest = hashlib.sha256(item.reference.encode("utf-8")).hexdigest()[:16]
-                destination = _hashed_result_path(Path(output_dir) / relative, view, digest)
-            else:
-                destination = _result_path(Path(output_dir) / relative, view)
+            destination = _result_path(Path(output_dir) / relative, view)
+            if (
+                item.is_remote
+                and len(destination.name.encode("utf-8")) > _MAX_GENERATED_RESULT_NAME_BYTES
+            ):
+                raise ValidationError(
+                    "generated remote result filename exceeds the "
+                    f"{_MAX_GENERATED_RESULT_NAME_BYTES}-byte UTF-8 limit.",
+                    hint="use --output-file with a shorter name for this input.",
+                )
         elif stream_single and len(input_plan.inputs) == 1:
             destination = None
         else:
@@ -470,6 +475,19 @@ def plan_outputs(
 
     counts = Counter(path for path in destinations if path is not None)
     collided = {path for path, count in counts.items() if count > 1}
+    conflicting_sources: dict[Path, list[PlannedInput]] = {}
+    for item, destination in zip(input_plan.inputs, destinations, strict=True):
+        if destination is not None and destination in collided:
+            conflicting_sources.setdefault(destination, []).append(item)
+    for destination, sources in conflicting_sources.items():
+        if any(item.is_remote for item in sources):
+            references = ", ".join(redact_input_reference(item.reference) for item in sources)
+            raise ValidationError(
+                f"multiple inputs resolve to the same result output path: {destination} "
+                f"({references}).",
+                hint="analyze these inputs separately with distinct --output-file paths.",
+            )
+
     reserved = set(counts)
     for index, destination in sorted(
         ((index, path) for index, path in enumerate(destinations) if path in collided),

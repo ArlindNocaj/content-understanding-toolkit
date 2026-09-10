@@ -360,17 +360,31 @@ verify the SAS start and expiry times, read permission, and Azure Storage networ
 rules.
 
 With `--output-dir`, each remote result uses
-`<filename>.<url-hash>.result.json` (or `.result.md`). The hash is the first 16
-hexadecimal characters of SHA-256 over the complete input URL, including its
-query string. Names stay stable across input ordering and batch sizes; changing
-the URL or renewing its SAS changes the hash. Query parameters are not written
-in plaintext in the filename. Explicit `--output-file` names are unchanged.
-The filename portion is truncated as needed so generated names containing a
-hash fit within 240 UTF-8 bytes, leaving room for atomic-write temporary names.
-If a local result would use the same path as a remote result, only the local
-result is renamed. Unresolvable output collisions fail before analysis.
-Results created under the previous naming rule are not automatically migrated
-or reused; a new analysis may incur additional charges.
+`<filename>.result.json` (or `.result.md`), preserving the filename and extension
+from the URL path. For example, `invoice.pdf` produces `invoice.pdf.result.json`.
+No URL hash is added, and query strings do not participate in naming, so renewing
+a SAS does not change the result path. Filenames are sanitized for the local
+filesystem; an empty URL path uses `remote-input`.
+
+Generated remote result names, including the result suffix, must fit within 240
+UTF-8 bytes, leaving room for atomic-write temporary names. Longer names fail
+before analysis instead of being truncated. Analyze that input separately with
+a shorter `--output-file` name, or omit file-output options to stream one result
+to stdout. Explicit `--output-file` names are unchanged.
+
+If two inputs in the same batch map to one result path and either input is
+remote, CU CLI rejects the entire batch before calling the service or writing
+files, including during `--dry-run`. `--on-existing skip` and `reanalyze` do not
+bypass this check. Analyze the conflicting inputs separately with distinct
+`--output-file` paths or output directories. Collisions between local inputs
+retain their existing disambiguation behavior.
+
+Across separate invocations, existing results follow `--on-existing`: `error`
+(the default), `skip`, or `reanalyze`. This check uses the output path, not source
+identity: `skip` can reuse a same-named result from a different URL. Use separate
+output paths when the sources differ. Old hash-named results are not
+automatically migrated or reused, so a new analysis may incur additional
+charges even when `--on-existing skip` is selected.
 
 For multiple inputs that include a URL, specify `--output-dir` because a remote
 result cannot be written next to its source. A dry run reports remote sizes as

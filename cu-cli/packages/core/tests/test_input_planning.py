@@ -436,17 +436,19 @@ def test_single_input_streams_without_destination_by_default(tmp_path):
     assert execution.outputs[0].path is None
 
 
-def test_remote_input_uses_url_filename_under_output_directory(tmp_path):
+@pytest.mark.parametrize("selection", ["positional", "urls"])
+@pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
+def test_remote_input_uses_url_filename_under_output_directory(tmp_path, selection, view):
     url = "https://storage.example.test/container/sample.pdf?sv=1&sig=secret"
 
     execution = plan_outputs(
-        plan_inputs(positional=[url]),
-        view=ResultView.FULL,
+        plan_inputs(**{selection: [url]}),
+        view=view,
         output_dir=tmp_path / "results",
     )
 
-    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
-    assert execution.outputs[0].path == tmp_path / f"results/sample.pdf.{digest}.result.json"
+    suffix = ".result.json" if view is ResultView.FULL else ".result.md"
+    assert execution.outputs[0].path == tmp_path / f"results/sample.pdf{suffix}"
     assert "secret" not in str(execution.outputs[0].path)
 
 
@@ -456,82 +458,105 @@ def test_remote_input_uses_url_filename_under_output_directory(tmp_path):
     ["a" * 230 + ".pdf", "\u4e2d" * 100 + ".pdf", "a" * 7000],
     ids=["ascii", "unicode", "long-url"],
 )
-def test_remote_generated_filename_has_byte_budget(tmp_path, view, basename):
+def test_remote_generated_filename_over_byte_budget_is_rejected(tmp_path, view, basename):
     url = f"https://example.test/{basename}?sig=secret"
-    execution = plan_outputs(
-        plan_inputs(positional=[url]), view=view, output_dir=tmp_path,
-    )
-
-    output = execution.outputs[0].path
-    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
-    suffix = ".result.json" if view is ResultView.FULL else ".result.md"
-    assert output is not None
-    assert len(output.name.encode("utf-8")) <= 240
-    assert output.name.endswith(f".{digest}{suffix}")
-    assert execution.outputs[0].source.relative_path.name == basename
-
-
-@pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
-@pytest.mark.parametrize("reverse_inputs", [False, True])
-def test_mixed_collisions_keep_remote_path_and_unique_local_outputs(
-    tmp_path, view, reverse_inputs,
-):
-    url = "https://example.test/input.pdf?id=one"
-    output_dir = tmp_path / "results"
-    remote_path = plan_outputs(
-        plan_inputs(positional=[url]), view=view, output_dir=output_dir,
-    ).outputs[0].path
-    assert remote_path is not None
-    suffix = ".result.json" if view is ResultView.FULL else ".result.md"
-    local = tmp_path / remote_path.name.removesuffix(suffix)
-    local.write_text("local input")
-    local_digest = hashlib.sha1(str(local.resolve()).encode("utf-8")).hexdigest()[:8]
-    neighbor = local.with_name(f"{local.name}.{local_digest}")
-    neighbor.write_text("neighbor input")
-    inputs = [url, str(local), str(neighbor)]
-    if reverse_inputs:
-        inputs.reverse()
-
-    execution = plan_outputs(
-        plan_inputs(positional=inputs), view=view, output_dir=output_dir,
-    )
-
-    paths = {output.source.reference: output.path for output in execution.outputs}
-    assert paths[url] == remote_path
-    assert len(set(paths.values())) == len(inputs)
-    assert paths[str(neighbor.resolve())] == output_dir / f"{neighbor.name}{suffix}"
-
-
-@pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
-def test_remote_digest_collision_is_rejected(tmp_path, monkeypatch, view):
-    digest = hashlib.sha256(b"collision")
-    monkeypatch.setattr("cu_cli_core.input_planning.hashlib.sha256", lambda _value: digest)
-    inputs = plan_inputs(positional=[
-        "https://example.test/input.pdf?id=one&sig=secret",
-        "https://example.test/input.pdf?id=two&sig=secret",
-    ])
     output_dir = tmp_path / "results"
 
-    with pytest.raises(ValidationError, match="same result output path") as error:
-        plan_outputs(inputs, view=view, output_dir=output_dir)
+    with pytest.raises(ValidationError, match="240-byte UTF-8 limit") as error:
+        plan_outputs(plan_inputs(urls=[url]), view=view, output_dir=output_dir)
 
+    assert "--output-file" in (error.value.hint or "")
     assert "secret" not in str(error.value)
     assert not output_dir.exists()
 
 
 @pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
-def test_exhausted_local_collision_names_are_rejected(tmp_path, view):
-    url = "https://example.test/input.pdf?sig=secret"
+@pytest.mark.parametrize("reverse_inputs", [False, True])
+@pytest.mark.parametrize("policy", list(ExistingResultPolicy))
+def test_mixed_collisions_are_rejected_before_existing_policy(
+    tmp_path, view, reverse_inputs, policy,
+):
+    url = "https://example.test/input.pdf?id=one&sig=secret"
     output_dir = tmp_path / "results"
-    remote_path = plan_outputs(
-        plan_inputs(positional=[url]), view=view, output_dir=output_dir,
-    ).outputs[0].path
-    assert remote_path is not None
     suffix = ".result.json" if view is ResultView.FULL else ".result.md"
-    local = tmp_path / remote_path.name.removesuffix(suffix)
+    local = tmp_path / "input.pdf"
     local.write_text("local input")
-    digest = hashlib.sha1(str(local.resolve()).encode("utf-8")).hexdigest()
     inputs = [url, str(local)]
+    if reverse_inputs:
+        inputs.reverse()
+
+    with pytest.raises(ValidationError, match="same result output path") as error:
+        plan_outputs(
+            plan_inputs(positional=inputs), view=view, output_dir=output_dir, on_existing=policy,
+        )
+
+    assert str(output_dir / f"input.pdf{suffix}") in str(error.value)
+    assert str(local.resolve()) in str(error.value)
+    assert redact_input_reference(url) in str(error.value)
+    assert "secret" not in str(error.value)
+    assert "--output-file" in (error.value.hint or "")
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
+@pytest.mark.parametrize("policy", list(ExistingResultPolicy))
+@pytest.mark.parametrize(
+    ("urls", "basename"),
+    [
+        (
+            ("https://one.example.test/a/input.pdf", "https://two.example.test/b/input.pdf"),
+            "input.pdf",
+        ),
+        (
+            ("https://example.test/input.pdf?id=one", "https://example.test/input.pdf?id=two"),
+            "input.pdf",
+        ),
+        (
+            ("https://example.test/input:one.pdf", "https://example.test/input_one.pdf"),
+            "input_one.pdf",
+        ),
+        (("https://example.test/CON.pdf", "https://example.test/_CON.pdf"), "_CON.pdf"),
+        (("https://one.example.test/", "https://two.example.test/"), "remote-input"),
+    ],
+    ids=["basename", "query", "sanitized", "reserved", "empty-path"],
+)
+def test_remote_output_collisions_are_rejected(tmp_path, view, policy, urls, basename):
+    signed_urls = [url + ("&" if "?" in url else "?") + "sig=secret" for url in urls]
+    inputs = plan_inputs(urls=signed_urls)
+    output_dir = tmp_path / "results"
+    suffix = ".result.json" if view is ResultView.FULL else ".result.md"
+
+    with pytest.raises(ValidationError, match="same result output path") as error:
+        plan_outputs(inputs, view=view, output_dir=output_dir, on_existing=policy)
+
+    assert str(output_dir / f"{basename}{suffix}") in str(error.value)
+    assert all(redact_input_reference(url) in str(error.value) for url in signed_urls)
+    assert "secret" not in str(error.value)
+    assert not output_dir.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows paths are case-insensitive")
+def test_remote_case_only_output_collision_is_rejected_on_windows(tmp_path):
+    inputs = plan_inputs(urls=[
+        "https://example.test/Invoice.pdf",
+        "https://example.test/invoice.pdf",
+    ])
+
+    with pytest.raises(ValidationError, match="same result output path"):
+        plan_outputs(inputs, view=ResultView.FULL, output_dir=tmp_path / "results")
+
+
+@pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
+def test_exhausted_local_collision_names_are_rejected(tmp_path, view):
+    output_dir = tmp_path / "results"
+    inputs = []
+    for directory in ("first", "second"):
+        local = tmp_path / directory / "input.pdf"
+        local.parent.mkdir()
+        local.write_text("local input")
+        inputs.append(str(local))
+    local = Path(inputs[0])
+    digest = hashlib.sha1(str(local.resolve()).encode("utf-8")).hexdigest()
     for length in range(8, len(digest) + 1, 8):
         neighbor = local.with_name(f"{local.name}.{digest[:length]}")
         neighbor.write_text("neighbor input")
@@ -567,15 +592,26 @@ def test_local_digest_collisions_stay_stable_when_reordered(tmp_path, monkeypatc
     assert reordered_paths == original_paths
 
 
-def test_remote_explicit_output_file_is_unchanged(tmp_path):
+@pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
+@pytest.mark.parametrize("basename", ["input.pdf", "a" * 7000], ids=["short", "long"])
+def test_remote_explicit_output_file_is_unchanged(tmp_path, view, basename):
     output = tmp_path / "custom.json"
     execution = plan_outputs(
-        plan_inputs(positional=["https://example.test/input.pdf?sig=secret"]),
-        view=ResultView.FULL,
+        plan_inputs(urls=[f"https://example.test/{basename}?sig=secret"]),
+        view=view,
         output_file=output,
     )
 
     assert execution.outputs[0].path == output
+
+
+@pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
+def test_remote_long_filename_can_still_stream_to_stdout(view):
+    execution = plan_outputs(
+        plan_inputs(urls=[f"https://example.test/{'a' * 7000}?sig=secret"]), view=view,
+    )
+
+    assert execution.outputs[0].path is None
 
 
 def test_remote_batch_requires_output_directory():
@@ -590,35 +626,38 @@ def test_remote_batch_requires_output_directory():
         plan_outputs(inputs, view=ResultView.FULL)
 
 
-def test_remote_output_collisions_are_safe_and_distinct(tmp_path):
+@pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
+def test_distinct_remote_outputs_preserve_filenames_and_extensions(tmp_path, view):
     inputs = plan_inputs(
-        positional=[
+        urls=[
             "https://one.example.test/c/input.pdf?sig=first-secret",
-            "https://two.example.test/c/input.pdf?sig=second-secret",
+            "https://two.example.test/c/input.png?sig=second-secret",
         ]
     )
 
     execution = plan_outputs(
         inputs,
-        view=ResultView.FULL,
+        view=view,
         output_dir=tmp_path / "results",
     )
 
     paths = [output.path for output in execution.outputs]
-    assert len(set(paths)) == 2
-    assert all(path is not None and path.name.startswith("input.pdf.") for path in paths)
-    assert all("secret" not in str(path) for path in paths)
+    suffix = ".result.json" if view is ResultView.FULL else ".result.md"
+    assert paths == [
+        tmp_path / "results" / f"input.pdf{suffix}",
+        tmp_path / "results" / f"input.png{suffix}",
+    ]
 
 
 @pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
 @pytest.mark.parametrize("add_unrelated_input", [False, True])
 @pytest.mark.parametrize("keep_single_input", [False, True])
-def test_remote_collision_paths_remain_stable_when_inputs_reordered(
+def test_remote_paths_remain_stable_when_inputs_reordered(
     tmp_path, view, add_unrelated_input, keep_single_input,
 ):
     urls = [
-        "https://example.test/download?id=one&sig=first-secret",
-        "https://example.test/download?id=two&sig=second-secret",
+        "https://example.test/one.pdf?sig=first-secret",
+        "https://example.test/two.pdf?sig=second-secret",
     ]
     output_dir = tmp_path / "results"
     original = plan_outputs(
@@ -653,6 +692,27 @@ def test_remote_collision_paths_remain_stable_when_inputs_reordered(
         assert output.exists
         assert output.skipped
         assert output.path.read_text(encoding="utf-8") == output.source.url
+
+
+@pytest.mark.parametrize("view", [ResultView.FULL, ResultView.LLM_INPUT])
+@pytest.mark.parametrize("policy", list(ExistingResultPolicy))
+def test_remote_result_path_is_unchanged_when_sas_is_renewed(tmp_path, view, policy):
+    original_url = "https://example.test/input.pdf?sig=original-secret"
+    renewed_url = "https://example.test/input.pdf?sig=renewed-secret"
+    original = plan_outputs(
+        plan_inputs(urls=[original_url]), view=view, output_dir=tmp_path,
+    ).outputs[0].path
+    assert original is not None
+    original.write_text("existing result")
+
+    output = plan_outputs(
+        plan_inputs(urls=[renewed_url]), view=view, output_dir=tmp_path, on_existing=policy,
+    ).outputs[0]
+
+    assert output.path == original
+    assert output.exists
+    assert output.skipped is (policy is ExistingResultPolicy.SKIP)
+    assert output.path.read_text() == "existing result"
 
 
 def test_multiple_inputs_write_alongside_sources(tmp_path):
