@@ -73,8 +73,9 @@ def test_main_help_ends_with_supported_api_versions():
     assert "ready-to-use prebuilt analyzer or create a custom analyzer" in output
     assert "If CU CLI is not connected" not in output
     assert "cu profile set endpoint https://<resource-name>.services.ai.azure.com/" in output
-    assert "cu analyze sample.pdf -a prebuilt-layout" in output
-    assert "prebuilt-layout analyzer" in output
+    assert "cu analyze sample.pdf" in output
+    assert "cu resolve sample.json p30 --around 1" in output
+    assert "prebuilt-documentSearch" in output
     assert output.index("cu doctor") < output.index("cu analyze sample.pdf")
 
 
@@ -120,6 +121,7 @@ def test_env_var_help_documents_all_supported_variables():
         "CU_TELEMETRY",
         "CU_NO_UPDATE_CHECK",
         "CU_ON_EXISTS",
+        "CU_DEFAULT_ANALYZER",
     ):
         assert name in output
     assert "sensitive; always redacted" in output
@@ -181,7 +183,7 @@ def test_env_var_list_redacts_sensitive_values_in_all_formats(monkeypatch):
                 "cu infra generate",
                 "cu profile set endpoint https://<resource-name>.services.ai.azure.com/",
                 "cu doctor",
-                "cu analyze sample.pdf -a prebuilt-layout",
+                "cu analyze sample.pdf",
             ),
         ),
         (
@@ -430,9 +432,8 @@ def test_analyze_help_separates_warning_from_common_commands():
         (
             ("analyze", "--help"),
             (
-                (
-                    "Analyze one file with the configured default analyzer."
-                ),
+                "Rich markdown to stdout (prebuilt-documentSearch for documents",
+                "Markdown for the agent plus the full result for id lookups, one call.",
                 "Extract invoice fields as JSON.",
                 (
                     "Analyze immediate files in DIRECTORY and write all result files "
@@ -1306,19 +1307,48 @@ def test_analyze_rejects_missing_literal_path():
     assert "does not exist" in _plain(res.output)
 
 
-def test_analyze_requires_analyzer_when_default_is_unset(monkeypatch):
+def test_analyze_defaults_to_document_search_when_no_analyzer_is_configured(monkeypatch):
     Path("doc.pdf").write_bytes(b"%PDF-1.4 sample")
-    monkeypatch.setattr(
-        "cu_cli.commands.analyze.build_client",
-        lambda *_a, **_k: pytest.fail("client must not be built without an analyzer"),
-    )
+    captured: dict[str, str] = {}
+
+    def _fake_run_one(_client, job):
+        captured["analyzer"] = job.analyzer_id
+        return job, {"analyzerId": job.analyzer_id, "status": "ok"}
+
+    monkeypatch.delenv("CU_DEFAULT_ANALYZER", raising=False)
+    monkeypatch.setattr("cu_cli.commands.analyze.build_client", lambda *_a, **_k: object())
+    monkeypatch.setattr("cu_cli.commands.analyze._run_one", _fake_run_one)
 
     res = _run("analyze", "doc.pdf", "--json")
+    assert res.exit_code == 0, res.output
+    assert captured["analyzer"] == "prebuilt-documentSearch"
+    assert json.loads(res.output)["status"] == "ok"
+
+
+def test_analyze_default_analyzer_env_overrides_modality_default(monkeypatch):
+    Path("doc.pdf").write_bytes(b"%PDF-1.4 sample")
+    captured: dict[str, str] = {}
+
+    def _fake_run_one(_client, job):
+        captured["analyzer"] = job.analyzer_id
+        return job, {"analyzerId": job.analyzer_id, "status": "ok"}
+
+    monkeypatch.setenv("CU_DEFAULT_ANALYZER", "prebuilt-layout")
+    monkeypatch.setattr("cu_cli.commands.analyze.build_client", lambda *_a, **_k: object())
+    monkeypatch.setattr("cu_cli.commands.analyze._run_one", _fake_run_one)
+
+    res = _run("analyze", "doc.pdf", "--json")
+    assert res.exit_code == 0, res.output
+    assert captured["analyzer"] == "prebuilt-layout"
+
+
+def test_analyze_json_option_does_not_swallow_input_path():
+    Path("doc.pdf").write_bytes(b"%PDF-1.4 sample")
+
+    res = _run("analyze", "--json", "doc.pdf")
     assert res.exit_code == 2, res.output
     out = _plain(res.output)
-    assert "no default_analyzer is configured" in out
-    assert "--analyzer" in out
-    assert "cu profile set default_analyzer" in out
+    assert "--json=PATH" in out
 
 
 def test_readme_sample_analyze_single_file_output_json(monkeypatch):
@@ -1346,14 +1376,15 @@ def test_readme_sample_analyze_single_file_output_markdown_with_prebuilt_invoice
     def _fake_run_one(_client, job):
         return job, {"analyzerId": job.analyzer_id}
 
-    def _fake_dump_markdown(result, out=None):
-        assert out is None
+    def _fake_render_rich_markdown(result, level="coarse"):
         assert result["analyzerId"] == "prebuilt-invoice"
-        print("# INVOICE")
+        return "# INVOICE\n"
 
     monkeypatch.setattr("cu_cli.commands.analyze.build_client", lambda *_a, **_k: object())
     monkeypatch.setattr("cu_cli.commands.analyze._run_one", _fake_run_one)
-    monkeypatch.setattr("cu_cli.commands.analyze.dump_markdown", _fake_dump_markdown)
+    monkeypatch.setattr(
+        "cu_cli.commands.analyze.render_rich_markdown", _fake_render_rich_markdown
+    )
 
     res = _run(
         "analyze",
@@ -1443,18 +1474,20 @@ def test_readme_sample_analyze_directory_writes_markdown_sidecar_files(monkeypat
 
     monkeypatch.setattr("cu_cli.commands.analyze.build_client", lambda *_a, **_k: object())
     monkeypatch.setattr("cu_cli.commands.analyze._run_one", _fake_run_one)
-    monkeypatch.setattr("cu_cli.commands.analyze.render_markdown", lambda _result: "# doc\n")
+    monkeypatch.setattr(
+        "cu_cli.commands.analyze.render_rich_markdown", lambda _result, level="coarse": "# doc\n"
+    )
 
     res = _run(
         "analyze", "sample_files", "--recursive", "--analyzer", "prebuilt-layout"
     )
     assert res.exit_code == 0, res.output
-    assert (base / "a.pdf.result.md").exists()
-    assert (nested / "b.pdf.result.md").exists()
+    assert (base / "a.pdf.result.rich.md").exists()
+    assert (nested / "b.pdf.result.rich.md").exists()
 
 
 def test_analyze_output_dir_writes_correct_sidecar_extension_for_each_view(monkeypatch):
-    # Same input, both output formats: markdown -> .result.md, json -> .result.json.
+    # Same input, both output formats: rich markdown -> .result.rich.md, json -> .result.json.
     Path("doc.pdf").write_bytes(b"%PDF-1.4 x")
 
     def _fake_run_one(_client, job):
@@ -1462,13 +1495,15 @@ def test_analyze_output_dir_writes_correct_sidecar_extension_for_each_view(monke
 
     monkeypatch.setattr("cu_cli.commands.analyze.build_client", lambda *_a, **_k: object())
     monkeypatch.setattr("cu_cli.commands.analyze._run_one", _fake_run_one)
-    monkeypatch.setattr("cu_cli.commands.analyze.render_markdown", lambda _r: "# doc\n")
+    monkeypatch.setattr(
+        "cu_cli.commands.analyze.render_rich_markdown", lambda _r, level="coarse": "# doc\n"
+    )
 
     assert _run(
         "analyze", "doc.pdf", "--analyzer", "prebuilt-layout",
         "--output-dir", "md_out",
     ).exit_code == 0
-    assert (Path("md_out") / "doc.pdf.result.md").exists()
+    assert (Path("md_out") / "doc.pdf.result.rich.md").exists()
     assert not (Path("md_out") / "doc.pdf.result.json").exists()
 
     assert _run(
@@ -1476,7 +1511,7 @@ def test_analyze_output_dir_writes_correct_sidecar_extension_for_each_view(monke
         "--output-dir", "json_out", "--json",
     ).exit_code == 0
     assert (Path("json_out") / "doc.pdf.result.json").exists()
-    assert not (Path("json_out") / "doc.pdf.result.md").exists()
+    assert not (Path("json_out") / "doc.pdf.result.rich.md").exists()
 
 
 def test_analyze_inline_uses_synchronous_runner(monkeypatch):
@@ -1536,7 +1571,10 @@ def test_analyze_inline_batch_uses_synchronous_runner_for_every_job(monkeypatch)
     calls = []
 
     monkeypatch.setattr("cu_cli.commands.analyze.build_client", lambda *_a, **_k: object())
-    monkeypatch.setattr("cu_cli.commands.analyze.render_markdown", lambda result: result["input"])
+    monkeypatch.setattr(
+        "cu_cli.commands.analyze.render_rich_markdown",
+        lambda result, level="coarse": result["input"],
+    )
     monkeypatch.setattr(
         "cu_cli.commands.analyze._run_one_inline",
         lambda _client, job: (calls.append(job.input_ref) or (job, {"input": job.input_ref})),
@@ -1550,8 +1588,8 @@ def test_analyze_inline_batch_uses_synchronous_runner_for_every_job(monkeypatch)
 
     assert res.exit_code == 0, res.output
     assert {Path(call).name for call in calls} == {path.name for path in paths}
-    assert (Path("results") / "one.pdf.result.md").exists()
-    assert (Path("results") / "two.pdf.result.md").exists()
+    assert (Path("results") / "one.pdf.result.rich.md").exists()
+    assert (Path("results") / "two.pdf.result.rich.md").exists()
 
 
 def test_analyze_inline_requires_preview_api_version(monkeypatch):
@@ -2826,7 +2864,9 @@ def test_analyze_directory_sends_unknown_extensions_to_service(monkeypatch):
 
     monkeypatch.setattr("cu_cli.commands.analyze.build_client", lambda *_a, **_k: object())
     monkeypatch.setattr("cu_cli.commands.analyze._run_one", _fake_run_one)
-    monkeypatch.setattr("cu_cli.commands.analyze.render_markdown", lambda _r: "# doc\n")
+    monkeypatch.setattr(
+        "cu_cli.commands.analyze.render_rich_markdown", lambda _r, level="coarse": "# doc\n"
+    )
 
     res = _run(
         "analyze", "corpus", "--analyzer", "prebuilt-layout", "--output-dir", "out", "-y"
@@ -2921,7 +2961,9 @@ def test_analyze_report_writes_per_input_status(monkeypatch):
 
     monkeypatch.setattr("cu_cli.commands.analyze.build_client", lambda *_a, **_k: object())
     monkeypatch.setattr("cu_cli.commands.analyze._run_one", _fake_run_one)
-    monkeypatch.setattr("cu_cli.commands.analyze.render_markdown", lambda _r: "# doc\n")
+    monkeypatch.setattr(
+        "cu_cli.commands.analyze.render_rich_markdown", lambda _r, level="coarse": "# doc\n"
+    )
 
     res = _run(
         "analyze", "corpus", "--analyzer", "prebuilt-layout",
@@ -3044,7 +3086,7 @@ def test_analyze_single_stdout_empty_markdown_writes_actionable_failure_report(m
 
     Path("only.pdf").write_bytes(b"%PDF-1.4 a")
 
-    def _empty_markdown(_result):
+    def _empty_markdown(_result, _level):
         raise EmptyMarkdownOutputError("to_llm_input() returned empty markdown output.")
 
     monkeypatch.setattr("cu_cli.commands.analyze.build_client", lambda *_a, **_k: object())
@@ -3052,7 +3094,7 @@ def test_analyze_single_stdout_empty_markdown_writes_actionable_failure_report(m
         "cu_cli.commands.analyze._run_one",
         lambda _client, job: (job, {"ok": True}),
     )
-    monkeypatch.setattr("cu_cli.commands.analyze.dump_markdown", _empty_markdown)
+    monkeypatch.setattr("cu_cli.commands.analyze.render_rich_markdown", _empty_markdown)
 
     res = _run(
         "analyze",

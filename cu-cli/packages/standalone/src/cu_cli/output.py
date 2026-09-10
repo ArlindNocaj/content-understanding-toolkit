@@ -16,7 +16,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from cu_cli_core.serialization import to_plain_value
 from rich.console import Console
@@ -123,6 +123,16 @@ def dump_json(
             raise
 
 
+def _as_sdk_result(result: Any) -> Any:
+    """Wrap a plain result dict (raw service JSON) in the SDK model when needed."""
+    if isinstance(result, Mapping):
+        from azure.ai.contentunderstanding.models import AnalysisResult
+        from cu_cli_core.rich_markdown import unwrap_result
+
+        return AnalysisResult(dict(unwrap_result(result)))
+    return result
+
+
 def render_markdown(result: Any) -> str:
     """Render an analysis result as LLM-friendly markdown via SDK helper only."""
     try:
@@ -133,14 +143,35 @@ def render_markdown(result: Any) -> str:
             "Install azure-ai-contentunderstanding>=1.2.0b3."
         ) from exc
 
-    rendered = to_llm_input(result)
+    rendered = to_llm_input(_as_sdk_result(result))
     if not isinstance(rendered, str) or not rendered.strip():
         raise EmptyMarkdownOutputError("to_llm_input() returned empty markdown output.")
     return rendered
 
 
-def dump_markdown(result: Any, out: "Path | None" = None) -> None:
-    body = render_markdown(result)
+def render_rich_markdown(result: Any, level: str = "coarse") -> str:
+    """Markdown with ``<!--id-->`` anchors (see :mod:`cu_cli_core.rich_markdown`)."""
+    from cu_cli_core.rich_markdown import unwrap_result, with_rich_markdown
+
+    if not isinstance(result, Mapping):
+        result = to_jsonable(result)
+    return render_markdown(with_rich_markdown(unwrap_result(result), level))
+
+
+def render_id_map(result: Any, level: str = "coarse") -> dict[str, Any]:
+    """The compact id sidecar that turns rich-markdown ids into page + bbox."""
+    from cu_cli_core.rich_markdown import build_id_map, unwrap_result
+
+    if not isinstance(result, Mapping):
+        result = to_jsonable(result)
+    for content in unwrap_result(result).get("contents") or []:
+        if isinstance(content, Mapping) and isinstance(content.get("markdown"), str):
+            return build_id_map(content, level)
+    raise RuntimeError("the result has no markdown content; no id map can be produced.")
+
+
+def dump_text(body: str, out: "Path | None" = None) -> None:
+    """Write text to stdout (newline-terminated) or atomically-ish to *out*."""
     if out is None:
         sys.stdout.write(body)
         if not body.endswith("\n"):
@@ -149,6 +180,10 @@ def dump_markdown(result: Any, out: "Path | None" = None) -> None:
     else:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(body, encoding="utf-8")
+
+
+def dump_markdown(result: Any, out: "Path | None" = None) -> None:
+    dump_text(render_markdown(result), out)
 
 
 def analyzer_table(rows: Iterable[Any]) -> Table:

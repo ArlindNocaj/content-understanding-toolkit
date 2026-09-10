@@ -1,5 +1,19 @@
 # Release History
 
+## Unreleased
+
+### Features Added
+
+- `cu analyze` no longer requires a configured analyzer: it picks one by file type (`prebuilt-documentSearch` for documents, `prebuilt-imageSearch` / `-audioSearch` / `-videoSearch` otherwise). `CU_DEFAULT_ANALYZER` overrides it; precedence is `--analyzer` › env › profile › file type.
+- Output flags are additive and each names its destination: `--md-rich [PATH|coarse|paragraph]` (default), `--md [PATH]`, `--json [PATH]`, `--map [PATH]`. All views are rendered locally from one service call.
+- Rich Markdown: `<!--s3-->` / `<!--t0-->` / `<!--f0-->` anchors before sections, tables and figures (and `<!--p30-->` per paragraph with `--md-rich=paragraph`). Ids are the array indices of the service result; removing the anchors yields the plain Markdown.
+- Added `cu resolve RESULT.json ID... [--around N] [--page] [--pages N]` to turn anchors into page, bounding box, text and neighbouring blocks without a service call.
+- Analysis results are deleted on the service after retrieval (`--keep-result` opts out); the operation id is omitted from `--json` unless `--with-operation-id` is given.
+
+### Breaking Changes
+
+- `--llm-input` is now a hidden alias of `--md`; `--output-file` on `cu analyze` is replaced by the per-view `PATH` values. Batch results are written as `NAME.result.rich.md` by default (`.result.md` with `--md`).
+
 ## 0.1.0b1 (2026-09-04)
 
 ### Features Added

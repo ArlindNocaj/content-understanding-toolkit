@@ -27,6 +27,8 @@ _WILDCARD_CHARS = frozenset("*?[")
 _RESULT_SUFFIX = {
     ResultView.LLM_INPUT: ".result.md",
     ResultView.FULL: ".result.json",
+    ResultView.RICH: ".result.rich.md",
+    ResultView.MAP: ".result.map.json",
 }
 _GENERATED_RESULT_SUFFIXES = tuple(_RESULT_SUFFIX.values())
 

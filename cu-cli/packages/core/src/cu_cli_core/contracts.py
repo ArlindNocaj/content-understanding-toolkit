@@ -14,6 +14,8 @@ from typing import Any, Mapping
 class ResultView(str, Enum):
     LLM_INPUT = "llm-input"
     FULL = "full"
+    RICH = "rich"
+    MAP = "map"
 
 
 class SelectionMode(str, Enum):

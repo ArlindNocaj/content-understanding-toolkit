@@ -304,18 +304,24 @@ the authoritative [Microsoft Foundry provisioning guide](provisioning.md).
 
 ## Analyze
 
-An analyzer defines how Content Understanding processes a file. Analyze one file
-with the `prebuilt-layout` content extraction analyzer:
+An analyzer defines how Content Understanding processes a file. Without
+`--analyzer` the CLI picks one by file type (`prebuilt-documentSearch` for
+documents; `CU_DEFAULT_ANALYZER` overrides it):
 
 ```bash
-# Analyze is a billed service call. Markdown is written to standard output.
-cu analyze ./document.pdf --analyzer prebuilt-layout
+# Analyze is a billed service call. Rich Markdown is written to standard output.
+cu analyze ./document.pdf
+cu analyze ./document.pdf --analyzer prebuilt-layout    # model-free layout only
 ```
 
-By default, CU CLI formats the analyzer result as Markdown with the Content
-Understanding SDK's `to_llm_input()` helper. Use `--json` for the complete
-analyzer result as JSON or `--llm-input` to select the default Markdown view
-explicitly.
+By default, CU CLI prints *rich Markdown*: the Content Understanding SDK's
+`to_llm_input()` Markdown plus `<!--s3-->` / `<!--t0-->` / `<!--f0-->` anchors
+before sections, tables and figures (`--md-rich=paragraph` adds `<!--p30-->`).
+Output flags are additive: `--md-rich [PATH|coarse|paragraph]` (default),
+`--md [PATH]` plain Markdown, `--json [PATH]` the complete result, `--map [PATH]`
+an `id → page/bbox/span` sidecar. `cu resolve RESULT.json p30 --around 1` turns
+an anchor into page, bounding box and neighbouring text offline. Results are
+deleted on the service after retrieval (`--keep-result` to keep them).
 
 Use the CU CLI profile's default analyzer:
 
@@ -351,7 +357,7 @@ source directory. For example:
 
 ```text
 ./documents/2026/invoice-01.pdf
-  -> ./results/2026/invoice-01.pdf.result.md
+  -> ./results/2026/invoice-01.pdf.result.rich.md
 ```
 
 JSON results use `.result.json` instead. With one input, omit `--output-dir` to
@@ -401,7 +407,7 @@ service calls and writes no result files. It cannot validate analyzer
 existence, file contents, service-side format acceptance, usage, or cost.
 Hidden files directly under a selected or visible directory are named and
 counted as skipped. Files inside hidden directories and CU CLI's own
-`*.result.md` and `*.result.json` files are excluded from discovery to avoid
+`*.result.rich.md`, `*.result.md`, `*.result.map.json` and `*.result.json` files are excluded from discovery to avoid
 infrastructure noise and accidental reanalysis.
 
 After reviewing the selection, remove `--dry-run` to submit the files. For

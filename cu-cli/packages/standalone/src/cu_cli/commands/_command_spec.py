@@ -58,6 +58,12 @@ def _click_option(
         kwargs["default"] = argument.default
     if argument.value_type is ArgumentValueType.BOOLEAN:
         kwargs["is_flag"] = True
+    elif argument.optional_value:
+        kwargs["is_flag"] = False
+        kwargs["flag_value"] = argument.optional_value_default
+        kwargs["type"] = (
+            click.Choice(argument.choices) if argument.choices else _click_type(argument)
+        )
     else:
         kwargs["type"] = (
             click.Choice(argument.choices)

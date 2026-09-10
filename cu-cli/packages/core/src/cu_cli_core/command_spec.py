@@ -51,6 +51,10 @@ class ArgumentSpec:
     file_okay: bool = True
     dir_okay: bool = True
     metavar: str | None = None
+    # ``--json`` / ``--json PATH``: the option may be given with or without a
+    # value; without one the frontend substitutes ``optional_value_default``.
+    optional_value: bool = False
+    optional_value_default: str = "-"
     classification: SurfaceClassification = SurfaceClassification.COMMON
 
     @property
@@ -236,7 +240,8 @@ ANALYZE = CommandSpec(
             aliases=("-a",),
             field="analyzer",
             parser_name="analyzer_id",
-            help="Analyzer name; defaults to the configured default analyzer.",
+            help="Analyzer name. Default: the profile default_analyzer, else "
+                 "prebuilt-documentSearch/imageSearch/audioSearch/videoSearch by file type.",
         ),
         ArgumentSpec(
             "--inline",
@@ -254,17 +259,65 @@ ANALYZE = CommandSpec(
             value_type=ArgumentValueType.BOOLEAN,
         ),
         ArgumentSpec(
-            "--llm-input",
-            field="llm_input",
-            parser_name="llm_input",
-            help="Return the analyzer result formatted as generative AI model input.",
-            value_type=ArgumentValueType.BOOLEAN,
+            "--md-rich",
+            field="md_rich",
+            parser_name="md_rich",
+            help="Markdown with element anchors like <!--s3--> / <!--t0--> / <!--p30--> "
+                 "(default output). Optional PATH, or a level: coarse "
+                 "(sections/tables/figures) | paragraph.",
+            metavar="[PATH|coarse|paragraph]",
+            optional_value=True,
+            classification=SurfaceClassification.FRONTEND_PRESENTATION,
+        ),
+        ArgumentSpec(
+            "--md",
+            field="md",
+            parser_name="md_output",
+            help="Plain markdown without ids. Optional PATH.",
+            metavar="[PATH]",
+            optional_value=True,
+            classification=SurfaceClassification.FRONTEND_PRESENTATION,
         ),
         ArgumentSpec(
             "--json",
             field="json",
             parser_name="json_output",
-            help="Emit the complete analyzer result as JSON.",
+            help="Complete analysis result (spans, bounding boxes, fields). Optional PATH.",
+            metavar="[PATH]",
+            optional_value=True,
+            classification=SurfaceClassification.FRONTEND_PRESENTATION,
+        ),
+        ArgumentSpec(
+            "--map",
+            field="map",
+            parser_name="map_output",
+            help="Small id -> page/bbox/span sidecar for the rich markdown. Optional PATH.",
+            metavar="[PATH]",
+            optional_value=True,
+            classification=SurfaceClassification.FRONTEND_PRESENTATION,
+        ),
+        ArgumentSpec(
+            "--level",
+            field="level",
+            parser_name="level",
+            help="Id granularity for --md-rich/--map.",
+            choices=("coarse", "paragraph"),
+            classification=SurfaceClassification.FRONTEND_PRESENTATION,
+        ),
+        ArgumentSpec(
+            "--with-operation-id",
+            field="with_operation_id",
+            parser_name="with_operation_id",
+            help="Keep the service operation id in --json output (omitted by default).",
+            value_type=ArgumentValueType.BOOLEAN,
+            classification=SurfaceClassification.FRONTEND_PRESENTATION,
+        ),
+        ArgumentSpec(
+            "--keep-result",
+            field="keep_result",
+            parser_name="keep_result",
+            help="Keep the analysis result on the service. By default it is deleted "
+                 "right after retrieval so it cannot be fetched again by operation id.",
             value_type=ArgumentValueType.BOOLEAN,
             classification=SurfaceClassification.FRONTEND_PRESENTATION,
         ),
@@ -272,7 +325,7 @@ ANALYZE = CommandSpec(
             "--output-file",
             field="output_file",
             parser_name="output_file",
-            help="Write the primary payload for one selected file.",
+            help="Write the primary output (rich markdown, or --json) for one selected file.",
             value_type=ArgumentValueType.PATH,
             file_okay=True,
             dir_okay=False,

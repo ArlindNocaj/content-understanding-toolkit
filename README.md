@@ -11,6 +11,38 @@ The **Azure Content Understanding Toolkit** is a set of tools that ease integrat
 
 More tools will be added over time.
 
+## Quickstart
+
+```bash
+pip install cu-cli
+export CU_ENDPOINT=https://<resource>.services.ai.azure.com/   # az login is enough (or CU_API_KEY=…)
+cu analyze doc.pdf                                             # markdown → stdout
+```
+
+`cu analyze` picks the analyzer by file type (`prebuilt-documentSearch` for documents) and
+prints LLM-ready markdown: text, tables, a document summary, a description of every figure,
+and small anchors — `<!--s1-->` section, `<!--t0-->` table, `<!--f0-->` figure — that
+`cu resolve` turns back into page + bounding box, so an agent can cite where an answer came from.
+
+| I want to… | Command | You get |
+| --- | --- | --- |
+| Read a document as markdown (RAG, agents) | `cu analyze doc.pdf` | **Default** = `-a prebuilt-documentSearch --md-rich=coarse`: text and tables, document summary, figure/chart descriptions, anchors on key sections, tables and figures. |
+| …and point at any paragraph later | `cu analyze doc.pdf --md-rich=paragraph --json doc.json` | Adds `<!--p3-->` on every paragraph outside tables/figures (+6.5 % tokens) and saves the full result for lookups. Still one service call. |
+| Get page + bounding box + context for an anchor | `cu resolve doc.json p3 --around 1` | JSON with page, bbox (inches), text, and the block (paragraph, table or figure) before/after. Runs locally — no endpoint. |
+| See everything on the page of an anchor | `cu resolve doc.json p3 --page` | Page size, page markdown and every anchored element on that page with bboxes (`--pages 1` adds the neighbouring pages). |
+| Plain markdown only | `cu analyze doc.pdf --md` | Same text, no anchors. |
+| Fastest / cheapest OCR + layout, no LLM | `cu analyze doc.pdf -a prebuilt-layout` | Markdown + tables, no summary or figure descriptions. `-a prebuilt-read` for text only. |
+| What fields are in this document? | `cu analyze doc.pdf -a prebuilt-documentFields` | LLM-proposed key-value fields, no schema needed; `-a prebuilt-documentFieldSchema` returns a schema proposal instead. |
+| Extract fields (invoice, receipt, ID, …) | `cu analyze invoice.pdf -a prebuilt-invoice --json` | Typed fields, each with a **confidence score**, its **bounding box** (`source`) and text **span**. |
+| Extract *my* fields | `cu analyzer schema create --from-sample f.pdf …` → `cu analyzer create` | Custom analyzer; see [Create a custom analyzer][cu_custom_analyzer]. |
+| Batch a folder | `cu analyze ./docs --json --map -d ./out -y` | `NAME.result.rich.md`, `.result.json`, `.result.map.json` per file. |
+
+Output flags are additive — each names its own destination (`--md-rich [PATH|coarse|paragraph]`,
+`--md [PATH]`, `--json [PATH]`, `--map [PATH]`); a bare flag prints to stdout or writes
+`<file>.result.*` next to the input. Every result is deleted from the service right after
+retrieval (`--keep-result` keeps it). No endpoint yet? `cu infra generate` writes the
+azd/Bicep project — see the [CU CLI README](cu-cli/README.md).
+
 ## What is Content Understanding?
 
 New to CU? Start here. **Azure Content Understanding** is a multimodal AI service in Microsoft Foundry that turns unstructured files — documents, images, audio, and video — into structured, machine-readable output. See [What is Content Understanding?][cu_overview].
